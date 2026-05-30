@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import {
   LineChart, Line, AreaChart, Area, BarChart, Bar, RadarChart, Radar,
   PolarGrid, PolarAngleAxis, PolarRadiusAxis, XAxis, YAxis, CartesianGrid,
@@ -48,7 +48,7 @@ const sectors = [
   { name: "Cement", perf: 1.1, cap: 8.0 },
 ];
 
-const companies = [
+const SEED = [
   {
     t: "DANGCEM", n: "Dangote Cement", sector: "Cement", price: 478.5, chg: 1.2,
     pe: 11.4, pb: 2.9, roe: 26, de: 0.62, div: 4.1, rev: 14, eps: 9,
@@ -165,9 +165,42 @@ const tipStyle = { background: "#0a0a0a", border: `1px solid ${BORDER}`, borderR
 
 export default function App() {
   const [tab, setTab] = useState("dashboard");
-  const [sel, setSel] = useState(companies[2]);
-  const [cmp, setCmp] = useState([companies[2], companies[3], companies[0]]);
+  // The curated 8 carry full AI analytics. Live data from the public feed is
+  // merged on top (and adds the rest of the exchange) once it loads.
+  const SEEDED = useMemo(() => SEED.map((c) => ({ ...c, hasAnalytics: true })), []);
+  const [companies, setCompanies] = useState(SEEDED);
+  const [dataNote, setDataNote] = useState("Showing curated sample — loading live NGX prices…");
+  const [sel, setSel] = useState(SEED[2]);
+  const [cmp, setCmp] = useState([SEED[2], SEED[3], SEED[0]]);
   const [advanced, setAdvanced] = useState(true);
+
+  // Fetch the full NGX universe + live prices from our serverless proxy (free,
+  // public AFX data). Curated names keep their analytics + get live price;
+  // every other listed company becomes searchable with a real live quote.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/stocks")
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((data) => {
+        if (cancelled || !data?.stocks?.length) return;
+        const seedByT = Object.fromEntries(SEEDED.map((c) => [c.t, c]));
+        const merged = data.stocks.map((s) => {
+          const rich = seedByT[s.t];
+          return rich
+            ? { ...rich, price: s.price, chg: s.chg, vol: s.vol }
+            : { t: s.t, n: s.n, sector: "—", price: s.price, chg: s.chg, vol: s.vol, hasAnalytics: false };
+        });
+        const liveTs = new Set(merged.map((c) => c.t));
+        SEEDED.forEach((c) => { if (!liveTs.has(c.t)) merged.push(c); });
+        merged.sort((a, b) => a.t.localeCompare(b.t));
+        if (cancelled) return;
+        setCompanies(merged);
+        setSel((prev) => merged.find((c) => c.t === prev.t) || prev);
+        setDataNote(`Live NGX data · ${data.count} companies · updated ${new Date(data.updated).toLocaleTimeString()}`);
+      })
+      .catch(() => { if (!cancelled) setDataNote("Live data unavailable — showing curated sample."); });
+    return () => { cancelled = true; };
+  }, [SEEDED]);
 
   // AI Research Assistant
   const [chat, setChat] = useState([]);
@@ -218,7 +251,7 @@ export default function App() {
     lowrisk: (c) => c.risk === "Low" || c.risk === "Moderate",
     momentum: (c) => c.chg >= 2,
   };
-  const screened = companies.filter(screens[screen]);
+  const screened = companies.filter((c) => c.hasAnalytics && screens[screen](c));
 
   const toggleList = (ticker) =>
     setLists((p) => {
@@ -349,11 +382,16 @@ Always end with: "Not investment advice."`;
                     <span style={{ fontSize: 12.5, color: "rgba(255,255,255,0.6)" }}>{c.n}</span>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                    <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>{c.sector}</span>
-                    <span style={{
-                      fontSize: 10.5, fontWeight: 700, padding: "2px 8px", borderRadius: 5,
-                      background: `${RATING_COLOR[c.rating]}22`, color: RATING_COLOR[c.rating],
-                    }}>{c.rating}</span>
+                    {c.sector && c.sector !== "—" && <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>{c.sector}</span>}
+                    <span style={{ fontSize: 11.5, fontFamily: "JetBrains Mono", color: "rgba(255,255,255,0.7)" }}>₦{c.price.toLocaleString()}</span>
+                    {c.rating ? (
+                      <span style={{
+                        fontSize: 10.5, fontWeight: 700, padding: "2px 8px", borderRadius: 5,
+                        background: `${RATING_COLOR[c.rating]}22`, color: RATING_COLOR[c.rating],
+                      }}>{c.rating}</span>
+                    ) : (
+                      <span style={{ fontSize: 11, fontWeight: 700, fontFamily: "JetBrains Mono", color: c.chg >= 0 ? ACCENT : RED }}>{c.chg >= 0 ? "+" : ""}{c.chg}%</span>
+                    )}
                   </div>
                 </div>
               ))}
@@ -369,6 +407,9 @@ Always end with: "Not investment advice."`;
               color: tab === k ? "#fff" : "rgba(255,255,255,0.45)",
             }}>{label}</button>
           ))}
+        </div>
+        <div style={{ marginTop: 8, fontSize: 10.5, color: "rgba(255,255,255,0.4)", fontFamily: "JetBrains Mono" }}>
+          {dataNote}
         </div>
       </div>
 
@@ -527,6 +568,7 @@ Always end with: "Not investment advice."`;
                   </div>
                 </div>
 
+                {sel.hasAnalytics ? (<>
                 <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
                   <span style={{
                     padding: "6px 14px", borderRadius: 8, fontWeight: 700, fontSize: 13,
@@ -561,8 +603,20 @@ Always end with: "Not investment advice."`;
                     ))}
                   </div>
                 )}
+                </>) : (
+                  <div style={{
+                    marginTop: 16, fontSize: 13, lineHeight: 1.6, color: "rgba(255,255,255,0.7)",
+                    background: "rgba(0,0,0,0.3)", borderLeft: `3px solid ${BLUE}`, padding: "12px 14px", borderRadius: 6,
+                  }}>
+                    <strong style={{ color: BLUE }}>Live market quote. </strong>
+                    Real-time price from public NGX data{sel.vol ? ` · volume traded ${sel.vol.toLocaleString()}` : ""}.
+                    In-depth AI analytics (rating, health score, probability targets) are provided only for the
+                    curated coverage list — not yet for this company.
+                  </div>
+                )}
               </div>
 
+              {sel.hasAnalytics && (
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                 <div className="glass" style={{ borderRadius: 16, padding: 18 }}>
                   <div style={{ fontFamily: "Sora", fontWeight: 700, fontSize: 14 }}>Financial Health</div>
@@ -596,9 +650,11 @@ Always end with: "Not investment advice."`;
                   ))}
                 </div>
               </div>
+              )}
             </div>
 
             {/* AI Research Assistant */}
+            {sel.hasAnalytics && (
             <div className="glass" style={{ borderRadius: 16, padding: 18, marginTop: 14 }}>
               <div style={{ fontFamily: "Sora", fontWeight: 700, fontSize: 14, marginBottom: 4 }}>
                 AI Research Assistant <span style={{ color: ACCENT }}>· {sel.t}</span>
@@ -648,6 +704,7 @@ Always end with: "Not investment advice."`;
                 }}>Ask</button>
               </div>
             </div>
+            )}
           </>
         )}
         {tab === "compare" && (
@@ -656,7 +713,7 @@ Always end with: "Not investment advice."`;
               Select up to 6 companies to compare ({cmp.length} selected)
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 18 }}>
-              {companies.map((c) => {
+              {companies.filter((c) => c.hasAnalytics).map((c) => {
                 const on = cmp.find((x) => x.t === c.t);
                 return (
                   <button key={c.t} onClick={() => toggleCmp(c)} style={{
