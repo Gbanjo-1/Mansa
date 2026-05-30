@@ -537,13 +537,16 @@ Always end with: "Not investment advice."`;
               )}
             </div>
 
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
               {matches.length === 0 && (
                 <div style={{ fontSize: 13, color: "rgba(255,255,255,0.4)", padding: "6px 2px" }}>
                   No companies match “{search}”.
                 </div>
               )}
-              {matches.map((c) => (
+              {(search.trim()
+                ? matches
+                : [...matches].sort((a, b) => (b.hasAnalytics ? 1 : 0) - (a.hasAnalytics ? 1 : 0)).slice(0, 20)
+              ).map((c) => (
                 <button key={c.t} onClick={() => setSel(c)} style={{
                   fontFamily: "JetBrains Mono", fontSize: 12, padding: "7px 12px", borderRadius: 8, cursor: "pointer",
                   border: `1px solid ${sel.t === c.t ? ACCENT : BORDER}`, fontWeight: 700,
@@ -552,6 +555,11 @@ Always end with: "Not investment advice."`;
                 }}>{c.t}</button>
               ))}
             </div>
+            {!search.trim() && matches.length > 20 && (
+              <div style={{ fontSize: 11.5, color: "rgba(255,255,255,0.4)", marginBottom: 16 }}>
+                Showing 20 of {matches.length} — use the search to find any other listed company.
+              </div>
+            )}
 
             <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 14 }}>
               <div className="glass" style={{ borderRadius: 16, padding: 20 }}>
