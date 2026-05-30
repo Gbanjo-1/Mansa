@@ -188,7 +188,7 @@ export default function App() {
           const rich = seedByT[s.t];
           return rich
             ? { ...rich, price: s.price, chg: s.chg, vol: s.vol }
-            : { t: s.t, n: s.n, sector: "—", price: s.price, chg: s.chg, vol: s.vol, hasAnalytics: false };
+            : { t: s.t, n: s.n, sector: s.sector || "—", price: s.price, chg: s.chg, vol: s.vol, hasAnalytics: false };
         });
         const liveTs = new Set(merged.map((c) => c.t));
         SEEDED.forEach((c) => { if (!liveTs.has(c.t)) merged.push(c); });

@@ -1,55 +1,49 @@
-// Vercel Serverless Function — proxies & parses free public NGX data from AFX
-// (afx.kwayisi.org). Returns clean JSON so the static frontend can fetch it
-// same-origin (no CORS) and without exposing any third-party endpoint.
+// Vercel Serverless Function — free public NGX data.
 //
-// Source is a public HTML quote board; we fetch the listing pages, parse the
-// main table (ticker, name, volume, price, absolute change) and derive % change.
+// Source: african-markets.com NGX "Listed Companies" board. It renders one
+// server-side HTML table (Company | Sector | Price | 1D | YTD | M.Cap) for the
+// whole exchange, and is Cloudflare-hosted so it's reachable from Vercel's
+// serverless network (unlike afx.kwayisi.org, which blocks datacenter IPs).
+//
+// We fetch it, parse the table, and return clean JSON so the static frontend
+// can read it same-origin (no CORS, nothing third-party exposed in the browser).
 
-const PAGES = [
-  "https://afx.kwayisi.org/ngx/",
-  "https://afx.kwayisi.org/ngx/?page=2",
-];
+const SOURCE = "https://www.african-markets.com/en/stock-markets/ngse/listed-companies";
 
-// <tr><td><a .. title="Full Name">TICKER</a><td><a ..>Name</a><td>VOL<td>PRICE<td[ class=hi|lo]>±CHANGE
+// <tr ..><td col_width_1><a ..code=TICKER..>Name</a><td col_width_2>Sector<td col_width_3>Price<td col_width_4>1D…
 const ROW =
-  /<tr><td><a href=\S+ title="([^"]+)">([A-Z0-9.]+)<\/a><td><a href=\S+[^>]*>[^<]*<\/a><td[^>]*>([\d,]+)<td[^>]*>([\d.,]+)<td[^>]*>([+\-][\d.,]+)/g;
+  /<tr class="tabrow[^"]*"><td class="tabcol  col_width_1"><a href=.listed-companies\/company\?code=([A-Z0-9]+).[^>]*>([^<]+)<\/a><\/td><td class="tabcol  col_width_2">([^<]*)<\/td><td class="tabcol  col_width_3">([\d,]*\.?\d*)<\/td><td class="tabcol  col_width_4">(.*?)<\/td>/g;
 
 const num = (s) => parseFloat(String(s).replace(/,/g, "")) || 0;
 
-async function fetchPage(url) {
-  const r = await fetch(url, {
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.9",
-    },
-    redirect: "follow",
-  });
-  if (!r.ok) throw new Error(`AFX ${url} -> ${r.status}`);
-  return r.text();
-}
-
 export default async function handler(req, res) {
   try {
-    const htmls = await Promise.all(PAGES.map(fetchPage));
+    const r = await fetch(SOURCE, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+      redirect: "follow",
+    });
+    if (!r.ok) throw new Error(`source -> ${r.status}`);
+    const html = await r.text();
+
     const byTicker = {};
-    for (const html of htmls) {
-      let m;
-      while ((m = ROW.exec(html)) !== null) {
-        const [, name, t, vol, price, chgAbs] = m;
-        const p = num(price);
-        const ca = num(chgAbs);
-        const prev = p - ca;
-        const pct = prev > 0 ? +((ca / prev) * 100).toFixed(2) : 0;
-        byTicker[t] = { t, n: name.trim(), price: p, chg: pct, chgAbs: ca, vol: num(vol) };
-      }
+    let m;
+    while ((m = ROW.exec(html)) !== null) {
+      const [, t, name, sector, price, d1] = m;
+      const p = num(price);
+      if (!p) continue; // skip suspended / no-price rows
+      const pm = d1.match(/(-?\d+\.\d+)%/);
+      byTicker[t] = { t, n: name.trim(), sector: sector.trim() || "—", price: p, chg: pm ? parseFloat(pm[1]) : 0 };
     }
     const stocks = Object.values(byTicker).sort((a, b) => a.t.localeCompare(b.t));
+    if (!stocks.length) throw new Error("parsed 0 rows (source layout may have changed)");
 
-    // Cache at the edge: serve cached for 10 min, allow stale for 30 min while revalidating.
-    res.setHeader("Cache-Control", "public, s-maxage=600, stale-while-revalidate=1800");
-    res.status(200).json({ source: "afx.kwayisi.org/ngx", updated: new Date().toISOString(), count: stocks.length, stocks });
+    res.setHeader("Cache-Control", "public, s-maxage=900, stale-while-revalidate=3600");
+    res.status(200).json({ source: "african-markets.com (NGX)", updated: new Date().toISOString(), count: stocks.length, stocks });
   } catch (err) {
     const cause = err?.cause ? `${err.cause.code || ""} ${err.cause.message || err.cause}`.trim() : "";
     res.status(502).json({ error: "Failed to fetch NGX data", detail: String(err), cause });
