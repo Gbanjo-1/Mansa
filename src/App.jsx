@@ -126,6 +126,34 @@ const RATING_COLOR = {
 };
 const RISK_COLOR = { Low: ACCENT, Moderate: AMBER, Elevated: "#FF9F45", High: RED };
 
+// Value helper: real value or a clearly-marked "N/A — not in free public source".
+const NA = "N/A";
+const has = (v) => v !== undefined && v !== null && v !== "";
+const fmt = (v, suffix = "") => (has(v) ? `${v}${suffix}` : NA);
+// Transparent 1-day momentum read derived purely from the live price change.
+const momentumOf = (chg) =>
+  !has(chg) ? NA : chg >= 3 ? "Strong ▲" : chg > 0 ? "Up ▲" : chg === 0 ? "Flat —" : chg > -3 ? "Down ▼" : "Strong ▼";
+
+function Metric({ label, value, color }) {
+  const na = value === NA;
+  return (
+    <div style={{ background: "rgba(255,255,255,0.03)", borderRadius: 10, padding: "10px 12px", border: `1px solid ${BORDER}` }}>
+      <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.45)", textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontSize: 16, fontWeight: 700, fontFamily: "JetBrains Mono", marginTop: 3, color: na ? "rgba(255,255,255,0.28)" : color || "#fff" }}>{value}</div>
+    </div>
+  );
+}
+
+function ProfileSection({ title, note, children }) {
+  return (
+    <div className="glass" style={{ borderRadius: 16, padding: 18, marginTop: 14 }}>
+      <div style={{ fontFamily: "Sora", fontWeight: 700, fontSize: 14, marginBottom: note ? 3 : 12 }}>{title}</div>
+      {note && <div style={{ fontSize: 10.5, color: AMBER, marginBottom: 12 }}>{note}</div>}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(125px, 1fr))", gap: 10 }}>{children}</div>
+    </div>
+  );
+}
+
 /* ============================================================ */
 
 function Gauge({ label, value, suffix = "", invert = false, hint }) {
@@ -561,105 +589,70 @@ Always end with: "Not investment advice."`;
               </div>
             )}
 
-            <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 14 }}>
-              <div className="glass" style={{ borderRadius: 16, padding: 20 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                  <div>
-                    <div style={{ fontFamily: "Sora", fontWeight: 800, fontSize: 22 }}>{sel.n}</div>
-                    <div style={{ fontSize: 12, color: "rgba(255,255,255,0.45)" }}>{sel.t} · {sel.sector}</div>
-                  </div>
-                  <div style={{ textAlign: "right" }}>
-                    <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "JetBrains Mono" }}>₦{sel.price.toLocaleString()}</div>
-                    <div style={{ color: sel.chg >= 0 ? ACCENT : RED, fontWeight: 700, fontSize: 13 }}>
-                      {sel.chg >= 0 ? "▲" : "▼"} {Math.abs(sel.chg)}%
-                    </div>
-                  </div>
-                </div>
-
-                {sel.hasAnalytics ? (<>
-                <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-                  <span style={{
-                    padding: "6px 14px", borderRadius: 8, fontWeight: 700, fontSize: 13,
-                    background: `${RATING_COLOR[sel.rating]}22`, color: RATING_COLOR[sel.rating],
-                    border: `1px solid ${RATING_COLOR[sel.rating]}55`,
-                  }}>AI Rating: {sel.rating}</span>
-                  <span style={{
-                    padding: "6px 14px", borderRadius: 8, fontWeight: 700, fontSize: 13,
-                    background: `${RISK_COLOR[sel.risk]}22`, color: RISK_COLOR[sel.risk],
-                    border: `1px solid ${RISK_COLOR[sel.risk]}55`,
-                  }}>Risk: {sel.risk}</span>
-                </div>
-
-                <div style={{
-                  marginTop: 16, fontSize: 13, lineHeight: 1.6, color: "rgba(255,255,255,0.7)",
-                  background: "rgba(0,0,0,0.3)", borderLeft: `3px solid ${ACCENT}`, padding: "12px 14px", borderRadius: 6,
-                }}>
-                  <strong style={{ color: ACCENT }}>AI reasoning. </strong>{sel.reason}
-                </div>
-
-                {advanced && (
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginTop: 16 }}>
-                    {[
-                      ["P/E", sel.pe], ["P/B", sel.pb], ["ROE", `${sel.roe}%`],
-                      ["Debt/Equity", sel.de], ["Div Yield", `${sel.div}%`], ["Rev Growth", `${sel.rev}%`],
-                      ["EPS Growth", `${sel.eps}%`], ["Free Cash Flow", sel.fcf], ["Health", `${sel.health}/100`],
-                    ].map(([l, v]) => (
-                      <div key={l} style={{ background: "rgba(255,255,255,0.03)", borderRadius: 10, padding: "10px 12px", border: `1px solid ${BORDER}` }}>
-                        <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.45)", textTransform: "uppercase" }}>{l}</div>
-                        <div style={{ fontSize: 16, fontWeight: 700, fontFamily: "JetBrains Mono", marginTop: 3 }}>{v}</div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                </>) : (
-                  <div style={{
-                    marginTop: 16, fontSize: 13, lineHeight: 1.6, color: "rgba(255,255,255,0.7)",
-                    background: "rgba(0,0,0,0.3)", borderLeft: `3px solid ${BLUE}`, padding: "12px 14px", borderRadius: 6,
-                  }}>
-                    <strong style={{ color: BLUE }}>Live market quote. </strong>
-                    Real-time price from public NGX data{sel.vol ? ` · volume traded ${sel.vol.toLocaleString()}` : ""}.
-                    In-depth AI analytics (rating, health score, probability targets) are provided only for the
-                    curated coverage list — not yet for this company.
-                  </div>
-                )}
+            {/* Company header */}
+            <div className="glass" style={{ borderRadius: 16, padding: 20, display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
+              <div>
+                <div style={{ fontFamily: "Sora", fontWeight: 800, fontSize: 22 }}>{sel.n}</div>
+                <div style={{ fontSize: 12, color: "rgba(255,255,255,0.45)" }}>{sel.t} · {sel.sector}</div>
               </div>
-
-              {sel.hasAnalytics && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                <div className="glass" style={{ borderRadius: 16, padding: 18 }}>
-                  <div style={{ fontFamily: "Sora", fontWeight: 700, fontSize: 14 }}>Financial Health</div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 8 }}>
-                    <div style={{ fontSize: 44, fontWeight: 800, fontFamily: "JetBrains Mono", color: sel.health > 75 ? ACCENT : sel.health > 60 ? AMBER : RED }}>
-                      {sel.health}
-                    </div>
-                    <div style={{ fontSize: 11.5, color: "rgba(255,255,255,0.5)", lineHeight: 1.5 }}>
-                      Composite of profitability, liquidity, debt, cash-flow quality & growth sustainability.
-                    </div>
-                  </div>
-                </div>
-
-                <div className="glass" style={{ borderRadius: 16, padding: 18 }}>
-                  <div style={{ fontFamily: "Sora", fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Future Opportunity Engine</div>
-                  <div style={{ fontSize: 10.5, color: AMBER, marginBottom: 12 }}>
-                    ⚠ Model probability estimates — not guarantees. Wide confidence around all horizons.
-                  </div>
-                  {[["30 days", sel.p30], ["90 days", sel.p90], ["1 year", sel.p1y], ["3 years", sel.p3y]].map(([h, p]) => (
-                    <div key={h} style={{ marginBottom: 10 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-                        <span style={{ color: "rgba(255,255,255,0.6)" }}>Outperform NGX · {h}</span>
-                        <span style={{ fontFamily: "JetBrains Mono", fontWeight: 700 }}>{p}%</span>
-                      </div>
-                      <div style={{ height: 6, background: "rgba(255,255,255,0.08)", borderRadius: 4, marginTop: 4, position: "relative" }}>
-                        <div style={{ width: `${p}%`, height: "100%", background: p > 60 ? ACCENT : p > 50 ? AMBER : RED, borderRadius: 4 }} />
-                        {/* confidence band */}
-                        <div style={{ position: "absolute", top: -2, left: `${Math.max(0, p - 12)}%`, width: "24%", height: 10, border: `1px dashed rgba(255,255,255,0.25)`, borderRadius: 4 }} />
-                      </div>
-                    </div>
-                  ))}
+              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                {has(sel.rating) && (
+                  <span style={{ padding: "6px 14px", borderRadius: 8, fontWeight: 700, fontSize: 13, background: `${RATING_COLOR[sel.rating]}22`, color: RATING_COLOR[sel.rating], border: `1px solid ${RATING_COLOR[sel.rating]}55` }}>AI Rating: {sel.rating}</span>
+                )}
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "JetBrains Mono" }}>₦{sel.price.toLocaleString()}</div>
+                  <div style={{ color: sel.chg >= 0 ? ACCENT : RED, fontWeight: 700, fontSize: 13 }}>{sel.chg >= 0 ? "▲" : "▼"} {Math.abs(sel.chg)}% (1D)</div>
                 </div>
               </div>
-              )}
             </div>
+
+            {!sel.hasAnalytics && (
+              <div style={{ marginTop: 12, fontSize: 11.5, lineHeight: 1.6, color: "rgba(255,255,255,0.55)", background: "rgba(0,0,0,0.3)", borderLeft: `3px solid ${BLUE}`, padding: "10px 14px", borderRadius: 6 }}>
+                <strong style={{ color: BLUE }}>Live price &amp; sector are real public NGX data. </strong>
+                Fundamentals and AI scores show <strong>N/A</strong> where no free public source provides them; the momentum read is computed from today’s price move.
+              </div>
+            )}
+
+            {has(sel.reason) && (
+              <div style={{ marginTop: 12, fontSize: 13, lineHeight: 1.6, color: "rgba(255,255,255,0.7)", background: "rgba(0,0,0,0.3)", borderLeft: `3px solid ${ACCENT}`, padding: "12px 14px", borderRadius: 6 }}>
+                <strong style={{ color: ACCENT }}>AI reasoning. </strong>{sel.reason}
+              </div>
+            )}
+
+            <ProfileSection title="Financial Metrics">
+              <Metric label="Last Price" value={`₦${sel.price.toLocaleString()}`} />
+              <Metric label="Financial Health" value={fmt(sel.health, "/100")} color={has(sel.health) ? (sel.health > 75 ? ACCENT : sel.health > 60 ? AMBER : RED) : undefined} />
+              <Metric label="Free Cash Flow" value={fmt(sel.fcf)} />
+            </ProfileSection>
+
+            <ProfileSection title="Growth Rates">
+              <Metric label="Revenue Growth" value={fmt(sel.rev, "%")} color={has(sel.rev) ? (sel.rev >= 0 ? ACCENT : RED) : undefined} />
+              <Metric label="EPS Growth" value={fmt(sel.eps, "%")} color={has(sel.eps) ? (sel.eps >= 0 ? ACCENT : RED) : undefined} />
+            </ProfileSection>
+
+            <ProfileSection title="Valuation Ratios">
+              <Metric label="P/E" value={fmt(sel.pe)} />
+              <Metric label="P/B" value={fmt(sel.pb)} />
+              <Metric label="ROE" value={fmt(sel.roe, "%")} />
+              <Metric label="Debt / Equity" value={fmt(sel.de)} />
+            </ProfileSection>
+
+            <ProfileSection title="Dividend Performance">
+              <Metric label="Dividend Yield" value={fmt(sel.div, "%")} color={has(sel.div) ? ACCENT : undefined} />
+            </ProfileSection>
+
+            <ProfileSection title="Risk Scores">
+              <Metric label="Risk Level" value={fmt(sel.risk)} color={has(sel.risk) ? RISK_COLOR[sel.risk] : undefined} />
+              <Metric label="Price Momentum (1D)" value={momentumOf(sel.chg)} color={sel.chg >= 0 ? ACCENT : RED} />
+            </ProfileSection>
+
+            <ProfileSection title="AI Scores" note={sel.hasAnalytics ? "⚠ Model probability estimates — not guarantees. Wide confidence around all horizons." : undefined}>
+              <Metric label="AI Rating" value={fmt(sel.rating)} color={has(sel.rating) ? RATING_COLOR[sel.rating] : undefined} />
+              <Metric label="Outperform · 30d" value={fmt(sel.p30, "%")} />
+              <Metric label="Outperform · 90d" value={fmt(sel.p90, "%")} />
+              <Metric label="Outperform · 1yr" value={fmt(sel.p1y, "%")} />
+              <Metric label="Outperform · 3yr" value={fmt(sel.p3y, "%")} />
+            </ProfileSection>
 
             {/* AI Research Assistant */}
             {sel.hasAnalytics && (
