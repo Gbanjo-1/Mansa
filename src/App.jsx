@@ -196,7 +196,7 @@ export default function App() {
   // Global search
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
-  const matches = query.trim()
+  const searchMatches = query.trim()
     ? companies.filter((c) =>
         c.t.toLowerCase().includes(query.toLowerCase()) ||
         c.n.toLowerCase().includes(query.toLowerCase()) ||
@@ -316,13 +316,13 @@ Always end with: "Not investment advice."`;
 
         {/* Global search */}
         <div style={{ position: "relative", marginTop: 12 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, background: "rgba(0,0,0,0.5)", border: `1px solid ${searchOpen && matches.length ? ACCENT : BORDER}`, borderRadius: 10, padding: "10px 14px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, background: "rgba(0,0,0,0.5)", border: `1px solid ${searchOpen && searchMatches.length ? ACCENT : BORDER}`, borderRadius: 10, padding: "10px 14px" }}>
             <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 14 }}>⌕</span>
             <input
               value={query}
               onChange={(e) => { setQuery(e.target.value); setSearchOpen(true); }}
               onFocus={() => setSearchOpen(true)}
-              onKeyDown={(e) => { if (e.key === "Enter" && matches.length) pickCompany(matches[0]); if (e.key === "Escape") setSearchOpen(false); }}
+              onKeyDown={(e) => { if (e.key === "Enter" && searchMatches.length) pickCompany(searchMatches[0]); if (e.key === "Escape") setSearchOpen(false); }}
               placeholder="Search companies by ticker, name, or sector…"
               style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: "#fff", fontSize: 13.5, fontFamily: "inherit" }}
             />
@@ -337,9 +337,9 @@ Always end with: "Not investment advice."`;
               background: "#0a0a0a", border: `1px solid ${BORDER}`, borderRadius: 12, overflow: "hidden",
               boxShadow: "0 16px 40px rgba(0,0,0,0.6)", maxHeight: 320, overflowY: "auto",
             }}>
-              {matches.length === 0 ? (
+              {searchMatches.length === 0 ? (
                 <div style={{ padding: "14px 16px", fontSize: 13, color: "rgba(255,255,255,0.4)" }}>No companies match "{query}"</div>
-              ) : matches.map((c) => (
+              ) : searchMatches.map((c) => (
                 <div key={c.t} className="row" onMouseDown={() => pickCompany(c)} style={{
                   display: "flex", justifyContent: "space-between", alignItems: "center",
                   padding: "11px 16px", cursor: "pointer", borderBottom: `1px solid ${BORDER}`,
