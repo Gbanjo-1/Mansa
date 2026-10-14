@@ -134,6 +134,65 @@ const fmt = (v, suffix = "") => (has(v) ? `${v}${suffix}` : NA);
 const momentumOf = (chg) =>
   !has(chg) ? NA : chg >= 3 ? "Strong ▲" : chg > 0 ? "Up ▲" : chg === 0 ? "Flat —" : chg > -3 ? "Down ▼" : "Strong ▼";
 
+/* ---------- Company logos ----------
+   Ticker -> official website domain. The logo is pulled from the site's icon
+   (Google favicon service, 128px). Anything unmapped, or whose icon fails /
+   comes back as the tiny default globe, falls back to a branded monogram so
+   every listed company always shows a mark next to its symbol. */
+const LOGO_DOMAINS = {
+  ACCESSCORP: "accessbankplc.com", AIICO: "aiicoplc.com", AIRTELAFRI: "airtel.africa",
+  ARADEL: "aradel.com", BUACEMENT: "buacement.com", BUAFOODS: "buafoodsplc.com",
+  CONOIL: "conoilplc.com", CUSTODIAN: "custodianplc.com.ng", DANGCEM: "dangotecement.com",
+  DANGSUGAR: "dangotesugar.com.ng", ETI: "ecobank.com", FBNH: "firstbanknigeria.com",
+  FIRSTHOLDCO: "firstbanknigeria.com", FCMB: "fcmb.com", FIDELITYBK: "fidelitybank.ng",
+  FIDSON: "fidson.com", FLOURMILL: "fmnplc.com", GTCO: "gtcoplc.com",
+  GUINNESS: "guinness-nigeria.com", JAIZBANK: "jaizbankplc.com", JBERGER: "julius-berger.com",
+  MAYBAKER: "may-baker.com", MTNN: "mtn.ng", NB: "nbplc.com", NESTLE: "nestle-cwa.com",
+  NGXGROUP: "ngxgroup.com", OANDO: "oandoplc.com", OKOMUOIL: "okomuoil.com",
+  PRESCO: "presco-plc.com", PZ: "pzcussons.com", SEPLAT: "seplatenergy.com",
+  STANBIC: "stanbicibtc.com", STERLINGNG: "sterling.ng", TOTAL: "totalenergies.ng",
+  TOTALENERG: "totalenergies.ng", TRANSCOHOT: "transcorphotels.com", TRANSCORP: "transcorpnigeria.com",
+  UACN: "uacnplc.com", UBA: "ubagroup.com", UCAP: "unitedcapitalplcgroup.com",
+  UNILEVER: "unilevernigeria.com", WAPCO: "lafarge.com.ng", WEMABANK: "wemabank.com",
+  ZENITHBANK: "zenithbank.com",
+};
+
+const monogramOf = (c) => {
+  const words = String(c.n || c.t).replace(/\b(plc|nigeria|ltd|limited|holdings?|group|company|of|the|and)\b/gi, "").trim().split(/\s+/).filter(Boolean);
+  const init = words.length >= 2 ? words[0][0] + words[1][0] : (words[0] || c.t).slice(0, 2);
+  return init.toUpperCase();
+};
+const hueOf = (t) => [...String(t)].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 360, 7);
+
+function CompanyLogo({ c, size = 28 }) {
+  const domain = LOGO_DOMAINS[c.t];
+  const [failed, setFailed] = useState(false);
+  useEffect(() => { setFailed(false); }, [c.t]);
+  const radius = Math.round(size * 0.28);
+  const box = { width: size, height: size, minWidth: size, borderRadius: radius, display: "inline-flex", alignItems: "center", justifyContent: "center", overflow: "hidden", flexShrink: 0 };
+  if (domain && !failed) {
+    return (
+      <span style={{ ...box, background: "#fff", border: `1px solid ${BORDER}` }} title={`${c.n || c.t} (${c.t})`}>
+        <img
+          src={`https://www.google.com/s2/favicons?domain=${domain}&sz=128`}
+          alt={`${c.n || c.t} logo`} loading="lazy"
+          style={{ width: "78%", height: "78%", objectFit: "contain" }}
+          onError={() => setFailed(true)}
+          onLoad={(e) => { if (e.currentTarget.naturalWidth <= 16) setFailed(true); }}
+        />
+      </span>
+    );
+  }
+  const h = hueOf(c.t);
+  return (
+    <span title={`${c.n || c.t} (${c.t})`} style={{
+      ...box, background: `linear-gradient(135deg, hsl(${h} 55% 32%), hsl(${(h + 40) % 360} 60% 20%))`,
+      border: `1px solid hsl(${h} 50% 45% / 0.5)`, color: "#fff",
+      fontFamily: "Sora", fontWeight: 800, fontSize: Math.max(9, Math.round(size * 0.38)), letterSpacing: 0.3,
+    }}>{monogramOf(c)}</span>
+  );
+}
+
 function Metric({ label, value, color }) {
   const na = value === NA;
   return (
@@ -406,6 +465,7 @@ Always end with: "Not investment advice."`;
                   padding: "11px 16px", cursor: "pointer", borderBottom: `1px solid ${BORDER}`,
                 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <CompanyLogo c={c} size={26} />
                     <span style={{ fontFamily: "JetBrains Mono", fontWeight: 700, fontSize: 13, minWidth: 92 }}>{c.t}</span>
                     <span style={{ fontSize: 12.5, color: "rgba(255,255,255,0.6)" }}>{c.n}</span>
                   </div>
@@ -527,9 +587,10 @@ Always end with: "Not investment advice."`;
                     <div key={c.t} className="row" onClick={() => { setSel(c); setTab("company"); }} style={{
                       display: "flex", justifyContent: "space-between", padding: "9px 8px", borderRadius: 8, cursor: "pointer",
                     }}>
-                      <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <CompanyLogo c={c} size={24} />
                         <span style={{ fontFamily: "JetBrains Mono", fontWeight: 700, fontSize: 13 }}>{c.t}</span>
-                        <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", marginLeft: 8 }}>{c.n}</span>
+                        <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>{c.n}</span>
                       </div>
                       <span style={{ fontWeight: 700, fontSize: 13, color: c.chg >= 0 ? ACCENT : RED, fontFamily: "JetBrains Mono" }}>
                         {c.chg >= 0 ? "+" : ""}{c.chg}%
@@ -573,27 +634,34 @@ Always end with: "Not investment advice."`;
               )}
               {(search.trim()
                 ? matches
-                : [...matches].sort((a, b) => (b.hasAnalytics ? 1 : 0) - (a.hasAnalytics ? 1 : 0)).slice(0, 20)
+                : [...matches].sort((a, b) => b.chg - a.chg).slice(0, 20)
               ).map((c) => (
                 <button key={c.t} onClick={() => setSel(c)} style={{
-                  fontFamily: "JetBrains Mono", fontSize: 12, padding: "7px 12px", borderRadius: 8, cursor: "pointer",
+                  display: "inline-flex", alignItems: "center", gap: 7,
+                  fontFamily: "JetBrains Mono", fontSize: 12, padding: "5px 12px 5px 6px", borderRadius: 8, cursor: "pointer",
                   border: `1px solid ${sel.t === c.t ? ACCENT : BORDER}`, fontWeight: 700,
                   background: sel.t === c.t ? "rgba(0,229,160,0.12)" : "transparent",
                   color: sel.t === c.t ? ACCENT : "rgba(255,255,255,0.6)",
-                }}>{c.t}</button>
+                }}><CompanyLogo c={c} size={20} />{c.t}</button>
               ))}
             </div>
             {!search.trim() && matches.length > 20 && (
               <div style={{ fontSize: 11.5, color: "rgba(255,255,255,0.4)", marginBottom: 16 }}>
-                Showing 20 of {matches.length} — use the search to find any other listed company.
+                Showing today’s top 20 performers of {matches.length} — use the search to find any other listed company.
               </div>
             )}
 
             {/* Company header */}
             <div className="glass" style={{ borderRadius: 16, padding: 20, display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
-              <div>
-                <div style={{ fontFamily: "Sora", fontWeight: 800, fontSize: 22 }}>{sel.n}</div>
-                <div style={{ fontSize: 12, color: "rgba(255,255,255,0.45)" }}>{sel.t} · {sel.sector}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                <CompanyLogo c={sel} size={52} />
+                <div>
+                  <div style={{ fontFamily: "Sora", fontWeight: 800, fontSize: 22 }}>{sel.n}</div>
+                  <div style={{ fontSize: 12, color: "rgba(255,255,255,0.45)", display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+                    <span style={{ fontFamily: "JetBrains Mono", fontWeight: 700, color: ACCENT, background: "rgba(0,229,160,0.1)", border: "1px solid rgba(0,229,160,0.3)", padding: "2px 8px", borderRadius: 6 }}>NGX: {sel.t}</span>
+                    <span>{sel.sector}</span>
+                  </div>
+                </div>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
                 {has(sel.rating) && (
@@ -718,10 +786,11 @@ Always end with: "Not investment advice."`;
                 const on = cmp.find((x) => x.t === c.t);
                 return (
                   <button key={c.t} onClick={() => toggleCmp(c)} style={{
-                    fontFamily: "JetBrains Mono", fontSize: 12, padding: "7px 12px", borderRadius: 8, cursor: "pointer",
+                    display: "inline-flex", alignItems: "center", gap: 7,
+                    fontFamily: "JetBrains Mono", fontSize: 12, padding: "5px 12px 5px 6px", borderRadius: 8, cursor: "pointer",
                     border: `1px solid ${on ? ACCENT : BORDER}`, fontWeight: 700,
                     background: on ? "rgba(0,229,160,0.12)" : "transparent", color: on ? ACCENT : "rgba(255,255,255,0.6)",
-                  }}>{c.t}</button>
+                  }}><CompanyLogo c={c} size={20} />{c.t}</button>
                 );
               })}
             </div>
@@ -732,7 +801,9 @@ Always end with: "Not investment advice."`;
                   <tr style={{ color: "rgba(255,255,255,0.45)" }}>
                     <th style={{ textAlign: "left", padding: "12px 14px", fontWeight: 600, fontSize: 11, textTransform: "uppercase" }}>Metric</th>
                     {cmp.map((c) => (
-                      <th key={c.t} style={{ padding: "12px 14px", fontFamily: "JetBrains Mono", color: "#fff", fontSize: 13 }}>{c.t}</th>
+                      <th key={c.t} style={{ padding: "12px 14px", fontFamily: "JetBrains Mono", color: "#fff", fontSize: 13 }}>
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}><CompanyLogo c={c} size={32} />{c.t}</div>
+                      </th>
                     ))}
                   </tr>
                 </thead>
@@ -802,9 +873,12 @@ Always end with: "Not investment advice."`;
                 <div key={c.t} className="glass row" style={{ borderRadius: 14, padding: 16, cursor: "pointer" }}
                   onClick={() => { setSel(c); setTab("company"); }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                    <div>
-                      <div style={{ fontFamily: "JetBrains Mono", fontWeight: 700, fontSize: 15 }}>{c.t}</div>
-                      <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>{c.sector}</div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <CompanyLogo c={c} size={36} />
+                      <div>
+                        <div style={{ fontFamily: "JetBrains Mono", fontWeight: 700, fontSize: 15 }}>{c.t}</div>
+                        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>{c.n} · {c.sector}</div>
+                      </div>
                     </div>
                     <span style={{
                       fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 6,
@@ -858,6 +932,7 @@ Always end with: "Not investment advice."`;
                   return (
                     <div key={c.t} className="row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 8px", borderRadius: 8, borderBottom: `1px solid ${BORDER}` }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <CompanyLogo c={c} size={24} />
                         <span style={{ fontFamily: "JetBrains Mono", fontWeight: 700, fontSize: 13, minWidth: 110 }}>{c.t}</span>
                         <span style={{ fontSize: 11.5, color: "rgba(255,255,255,0.4)" }}>{c.sector}</span>
                       </div>
