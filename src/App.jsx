@@ -197,6 +197,13 @@ function CompanyLogo({ c, size = 28 }) {
 const BeginnerCtx = createContext(false);
 const EXPLAIN = {
   "Last Price": "Latest traded price of one share on the NGX.",
+  "Market Cap": "Total value of all the company's shares at today's price.",
+  "52-Week Range": "Lowest and highest closing price over the past year.",
+  "Day Range": "Lowest and highest price traded in the latest session.",
+  "Volume": "Number of shares that changed hands in the latest session.",
+  "Value Traded": "Naira value of all shares traded in the latest session.",
+  "Shares Outstanding": "Total number of the company's shares in issue.",
+  "Board": "NGX listing tier (Premium, Main, Growth…).",
   "Financial Health": "Overall balance-sheet strength score. Above 75 is solid.",
   "Free Cash Flow": "Cash left after running and investing in the business — what can fund dividends.",
   "Revenue Growth": "How fast sales grew versus last year.",
@@ -239,10 +246,10 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* ignore */ } },
 };
 
-function ProfileSection({ title, note, children }) {
+function ProfileSection({ title, note, children, sample }) {
   return (
     <div className="glass" style={{ borderRadius: 16, padding: 18, marginTop: 14 }}>
-      <div style={{ fontFamily: "Sora", fontWeight: 700, fontSize: 14, marginBottom: note ? 3 : 12 }}>{title}</div>
+      <div style={{ fontFamily: "Sora", fontWeight: 700, fontSize: 14, marginBottom: note ? 3 : 12 }}>{title}{sample && <SampleTag />}</div>
       {note && <div style={{ fontSize: 10.5, color: AMBER, marginBottom: 12 }}>{note}</div>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(125px, 1fr))", gap: 10 }}>{children}</div>
     </div>
@@ -287,6 +294,40 @@ function Stat({ label, value, change, fmt, sample, sub }) {
 
 const tipStyle = { background: "#0a0a0a", border: `1px solid ${BORDER}`, borderRadius: 8, fontSize: 12 };
 
+// Formatting helpers for live data
+const signedPct = (v) => (v == null || !isFinite(v) ? NA : `${v >= 0 ? "+" : ""}${Number(v).toFixed(2)}%`);
+const pctChange = (a, b) => (a && b ? ((a - b) / b) * 100 : null);
+const nairaBig = (v) => {
+  if (v == null || !isFinite(v)) return NA;
+  const a = Math.abs(v);
+  if (a >= 1e12) return `₦${(v / 1e12).toFixed(2)}tn`;
+  if (a >= 1e9) return `₦${(v / 1e9).toFixed(2)}bn`;
+  if (a >= 1e6) return `₦${(v / 1e6).toFixed(1)}m`;
+  return `₦${Math.round(v).toLocaleString()}`;
+};
+const countBig = (v) => (v == null ? NA : v >= 1e9 ? `${(v / 1e9).toFixed(2)}bn` : v >= 1e6 ? `${(v / 1e6).toFixed(1)}m` : Math.round(v).toLocaleString());
+const fmtDate = (d) => {
+  const x = new Date(d);
+  return isNaN(x) ? "—" : x.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+};
+const fmtTick = (t, range) => {
+  const x = new Date(t);
+  return ["1M", "3M"].includes(range)
+    ? x.toLocaleDateString(undefined, { day: "numeric", month: "short" })
+    : x.toLocaleDateString(undefined, { month: "short", year: "2-digit" });
+};
+const ASI_RANGES = [["1M", "last month"], ["3M", "last 3 months"], ["6M", "last 6 months"], ["YTD", "year to date"], ["1Y", "last year"], ["5Y", "last 5 years"]];
+const rangeStart = (end, k) => {
+  const d = new Date(end);
+  if (k === "1M") d.setMonth(d.getMonth() - 1);
+  else if (k === "3M") d.setMonth(d.getMonth() - 3);
+  else if (k === "6M") d.setMonth(d.getMonth() - 6);
+  else if (k === "YTD") return new Date(d.getFullYear(), 0, 1).getTime();
+  else if (k === "1Y") d.setFullYear(d.getFullYear() - 1);
+  else d.setFullYear(d.getFullYear() - 5);
+  return d.getTime();
+};
+
 export default function App() {
   const [tab, setTab] = useState("dashboard");
   // The curated 8 carry full AI analytics. Live data from the public feed is
@@ -299,6 +340,33 @@ export default function App() {
   const [advanced, setAdvanced] = useState(() => store.get("mansa.advanced", true));
   useEffect(() => { store.set("mansa.advanced", advanced); }, [advanced]);
   const [live, setLive] = useState(false);
+
+  // Live market overview (ASI, market snapshot, FX, inflation)
+  const [market, setMarket] = useState(null);
+  const [asiRange, setAsiRange] = useState("1Y");
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/market")
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((d) => { if (!cancelled && (d.asi || d.snapshot || d.fx || d.inflation)) setMarket(d); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+  const asi = market?.asi || null;
+  const snap = market?.snapshot || null;
+  const fx = market?.fx || null;
+  const infl = market?.inflation || null;
+  const asiChart = useMemo(() => {
+    if (!asi?.series?.length) return [];
+    const end = asi.series[asi.series.length - 1][0];
+    const start = rangeStart(end, asiRange);
+    const pts = asi.series.filter(([t]) => t >= start);
+    const step = Math.max(1, Math.floor(pts.length / 400)); // keep the chart light
+    return pts.filter((_, i) => i % step === 0 || i === pts.length - 1).map(([t, v]) => ({ t, v }));
+  }, [asi, asiRange]);
+
+  // Per-company NGX data (quote, key stats, ~1 month of daily closes), cached by symbol
+  const [coData, setCoData] = useState({});
 
   // Fetch the full NGX universe + live prices from our serverless proxy (free,
   // public AFX data). Curated names keep their analytics + get live price;
@@ -334,6 +402,18 @@ export default function App() {
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
   useEffect(() => { setChat([]); setInput(""); }, [sel.t]);
+  useEffect(() => {
+    const t = sel.t;
+    if (coData[t]) return;
+    let cancelled = false;
+    setCoData((p) => ({ ...p, [t]: { loading: true } }));
+    fetch(`/api/company?symbol=${encodeURIComponent(t)}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((d) => { if (!cancelled) setCoData((p) => ({ ...p, [t]: d })); })
+      .catch(() => { if (!cancelled) setCoData((p) => ({ ...p, [t]: { error: true } })); });
+    return () => { cancelled = true; setCoData((p) => (p[t]?.loading ? { ...p, [t]: undefined } : p)); };
+  }, [sel.t]); // eslint-disable-line react-hooks/exhaustive-deps
+  const cd = coData[sel.t] || {};
 
   // Screener
   const [screen, setScreen] = useState("all");
@@ -464,7 +544,15 @@ export default function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          company: sel,
+          company: (() => {
+            const { history, loading, error, ...ngx } = coData[sel.t] || {};
+            return {
+              ...sel,
+              ngxLive: ngx.symbol ? ngx : undefined,
+              priceLastMonth: history?.length ? { from: history[0][1], to: history[history.length - 1][1] } : undefined,
+              market: asi ? { asi: asi.value, asiYtdPct: asi.ytd, asi1yPct: asi.r1y, usdngn: fx?.usdngn, inflationPct: infl?.value } : undefined,
+            };
+          })(),
           messages: next.map((m) => ({ role: m.role, content: m.content })),
         }),
       });
@@ -531,8 +619,14 @@ export default function App() {
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            {asi && (
+              <span title={`NGX All-Share Index · ${fmtDate(asi.asOf)}`} style={{ fontSize: 12, fontFamily: "JetBrains Mono", color: "rgba(255,255,255,0.75)" }}>
+                ASI {asi.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                {asi.chg != null && <span style={{ marginLeft: 6, color: asi.chg >= 0 ? ACCENT : RED }}>{signedPct(asi.chg)}</span>}
+              </span>
+            )}
             {live ? (
-              <span title="Live market breadth: advancers / decliners today" style={{ fontSize: 12, fontFamily: "JetBrains Mono", display: "flex", gap: 8 }}>
+              <span className="hide-sm" title="Live market breadth: advancers / decliners today" style={{ fontSize: 12, fontFamily: "JetBrains Mono", display: "flex", gap: 8 }}>
                 <span style={{ color: ACCENT }}>▲ {breadth.up}</span>
                 <span style={{ color: RED }}>▼ {breadth.down}</span>
                 <span style={{ color: "rgba(255,255,255,0.4)" }}>— {breadth.flat}</span>
@@ -621,53 +715,119 @@ export default function App() {
         {tab === "dashboard" && (
           <>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
+              {asi ? (
+                <Stat label="NGX All-Share" value={asi.value} change={asi.chg ?? undefined} fmt={(v) => v.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                  sub={`As of ${fmtDate(asi.asOf)}`} />
+              ) : (
+                <Stat label="NGX All-Share" value={MARKET.asi} change={MARKET.asiChange} fmt={(v) => v.toLocaleString()} sample />
+              )}
+              {snap?.cap ? (
+                <Stat label="Market Cap" value={snap.cap} fmt={nairaBig} sub="Equities, NGX" />
+              ) : (
+                <Stat label="Market Cap (₦tn)" value={MARKET.mktCap} change={MARKET.mktCapChange} fmt={(v) => v.toFixed(1)} sample />
+              )}
               {live && (
                 <Stat label="Market Breadth" value={breadth} change={breadth.avg} fmt={(b) => `${b.up}▲ ${b.down}▼`}
                   sub={`Avg move today across ${breadth.total} stocks`} />
               )}
-              <Stat label="NGX All-Share" value={MARKET.asi} change={MARKET.asiChange} fmt={(v) => v.toLocaleString()} sample />
-              <Stat label="Market Cap (₦tn)" value={MARKET.mktCap} change={MARKET.mktCapChange} fmt={(v) => v.toFixed(1)} sample />
-              <Gauge label="AI Opportunity" value={MARKET.opportunity} hint="Composite of value, momentum & flow signals" sample />
-              <Gauge label="Market Risk" value={MARKET.risk} invert hint="Higher = more risk. Lower score is better" sample />
-              <Gauge label="Sentiment" value={MARKET.sentiment} hint="News + announcements, last 14 days" sample />
+              {asi ? (
+                <>
+                  <Stat label="ASI Year-to-Date" value={asi.ytd} fmt={signedPct} sub={asi.r1m != null ? `1 month: ${signedPct(asi.r1m)}` : undefined} />
+                  <Stat label="ASI 1-Year Return" value={asi.r1y} fmt={signedPct} sub="In naira, before inflation" />
+                  <Stat label="Volatility (30D)" value={asi.vol30} fmt={(v) => (v == null ? NA : `${v}%`)} sub="Annualised, daily ASI moves" />
+                </>
+              ) : (
+                <>
+                  <Gauge label="AI Opportunity" value={MARKET.opportunity} hint="Composite of value, momentum & flow signals" sample />
+                  <Gauge label="Market Risk" value={MARKET.risk} invert hint="Higher = more risk. Lower score is better" sample />
+                  <Gauge label="Sentiment" value={MARKET.sentiment} hint="News + announcements, last 14 days" sample />
+                </>
+              )}
             </div>
 
             <div className="g-main" style={{ marginTop: 14 }}>
-              <div className="glass" style={{ borderRadius: 16, padding: 18 }}>
-                <div style={{ fontFamily: "Sora", fontWeight: 700, fontSize: 14, marginBottom: 4 }}>NGX All-Share Index<SampleTag /></div>
-                <div style={{ fontSize: 11.5, color: "rgba(255,255,255,0.4)", marginBottom: 10 }}>Trailing 9 months · index points</div>
-                <ResponsiveContainer width="100%" height={230}>
-                  <AreaChart data={asiSeries}>
-                    <defs>
-                      <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor={ACCENT} stopOpacity={0.4} />
-                        <stop offset="100%" stopColor={ACCENT} stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
-                    <XAxis dataKey="d" stroke="rgba(255,255,255,0.3)" fontSize={11} />
-                    <YAxis stroke="rgba(255,255,255,0.3)" fontSize={11} domain={["dataMin-2000", "dataMax+2000"]} />
-                    <Tooltip contentStyle={tipStyle} />
-                    <Area type="monotone" dataKey="v" stroke={ACCENT} strokeWidth={2} fill="url(#g)" />
-                  </AreaChart>
+              <div className="glass" style={{ borderRadius: 16, padding: 18, minWidth: 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+                  <div>
+                    <div style={{ fontFamily: "Sora", fontWeight: 700, fontSize: 14, marginBottom: 4 }}>NGX All-Share Index{!asi && <SampleTag />}</div>
+                    <div style={{ fontSize: 11.5, color: "rgba(255,255,255,0.4)" }}>
+                      {asi ? `Daily close · index points · ${ASI_RANGES.find((r) => r[0] === asiRange)[1]}` : "Trailing 9 months · index points"}
+                      {asi && asiChart.length > 1 && (() => {
+                        const ch = pctChange(asiChart[asiChart.length - 1].v, asiChart[0].v);
+                        return <span style={{ marginLeft: 8, fontFamily: "JetBrains Mono", color: ch >= 0 ? ACCENT : RED }}>{signedPct(ch)}</span>;
+                      })()}
+                    </div>
+                  </div>
+                  {asi && (
+                    <div role="group" aria-label="Time range" style={{ display: "flex", gap: 4 }}>
+                      {ASI_RANGES.map(([k]) => (
+                        <button key={k} onClick={() => setAsiRange(k)} style={{
+                          fontSize: 11, padding: "4px 9px", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontFamily: "JetBrains Mono",
+                          border: `1px solid ${asiRange === k ? ACCENT : BORDER}`, background: asiRange === k ? "rgba(0,229,160,0.12)" : "transparent",
+                          color: asiRange === k ? ACCENT : "rgba(255,255,255,0.55)",
+                        }}>{k}</button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <ResponsiveContainer width="100%" height={240}>
+                  {asi ? (
+                    <AreaChart data={asiChart} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                      <defs>
+                        <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor={ACCENT} stopOpacity={0.3} />
+                          <stop offset="100%" stopColor={ACCENT} stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
+                      <XAxis dataKey="t" type="number" scale="time" domain={["dataMin", "dataMax"]} stroke="rgba(255,255,255,0.3)" fontSize={11}
+                        tickFormatter={(t) => fmtTick(t, asiRange)} minTickGap={28} />
+                      <YAxis stroke="rgba(255,255,255,0.3)" fontSize={11} domain={["auto", "auto"]} width={62}
+                        tickFormatter={(v) => (v >= 1000 ? `${Math.round(v / 1000)}k` : v)} />
+                      <Tooltip contentStyle={tipStyle} labelFormatter={(t) => fmtDate(t)} formatter={(v) => [Number(v).toLocaleString(), "ASI"]} />
+                      <Area type="linear" dataKey="v" stroke={ACCENT} strokeWidth={2} fill="url(#g)" dot={false} activeDot={{ r: 4 }} isAnimationActive={false} />
+                    </AreaChart>
+                  ) : (
+                    <AreaChart data={asiSeries}>
+                      <defs>
+                        <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor={ACCENT} stopOpacity={0.4} />
+                          <stop offset="100%" stopColor={ACCENT} stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
+                      <XAxis dataKey="d" stroke="rgba(255,255,255,0.3)" fontSize={11} />
+                      <YAxis stroke="rgba(255,255,255,0.3)" fontSize={11} domain={["dataMin-2000", "dataMax+2000"]} />
+                      <Tooltip contentStyle={tipStyle} />
+                      <Area type="monotone" dataKey="v" stroke={ACCENT} strokeWidth={2} fill="url(#g)" />
+                    </AreaChart>
+                  )}
                 </ResponsiveContainer>
               </div>
 
               <div className="glass" style={{ borderRadius: 16, padding: 18 }}>
-                <div style={{ fontFamily: "Sora", fontWeight: 700, fontSize: 14, marginBottom: 12 }}>Macro Snapshot<SampleTag /></div>
-                {[
-                  ["Inflation", `${MARKET.inflation}%`, RED],
-                  ["Naira Strength", `${MARKET.naira}/100`, AMBER],
-                  ["Foreign Flow (MoM)", `${MARKET.foreignFlow}%`, RED],
-                  ["Economic Health", `${MARKET.econHealth}/100`, AMBER],
-                ].map(([l, v, c]) => (
-                  <div key={l} style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: `1px solid ${BORDER}` }}>
-                    <span style={{ fontSize: 12.5, color: "rgba(255,255,255,0.55)" }}>{l}</span>
-                    <span style={{ fontSize: 13.5, fontWeight: 700, color: c, fontFamily: "JetBrains Mono" }}>{v}</span>
+                <div style={{ fontFamily: "Sora", fontWeight: 700, fontSize: 14, marginBottom: 12 }}>Macro &amp; Market Snapshot{!market && <SampleTag />}</div>
+                {(market ? [
+                  ["USD / NGN", fx ? `₦${fx.usdngn.toLocaleString()}` : NA, fx ? `Daily rate · ${fmtDate(fx.updated)}` : "Unavailable"],
+                  ["Inflation", infl ? `${infl.value}%` : NA, infl ? `${infl.year} annual · ${infl.source}` : "Unavailable"],
+                  ["Value Traded", snap?.value ? nairaBig(snap.value) : NA, "Latest session, NGX"],
+                  ["Deals", snap?.deals ? Math.round(snap.deals).toLocaleString() : NA, snap?.volume ? `${(snap.volume / 1e6).toFixed(0)}m shares` : "Latest session"],
+                ] : [
+                  ["Inflation", `${MARKET.inflation}%`, "Sample"],
+                  ["Naira Strength", `${MARKET.naira}/100`, "Sample"],
+                  ["Foreign Flow (MoM)", `${MARKET.foreignFlow}%`, "Sample"],
+                  ["Economic Health", `${MARKET.econHealth}/100`, "Sample"],
+                ]).map(([l, v, sub]) => (
+                  <div key={l} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "9px 0", borderBottom: `1px solid ${BORDER}` }}>
+                    <div>
+                      <div style={{ fontSize: 12.5, color: "rgba(255,255,255,0.7)" }}>{l}</div>
+                      <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.35)" }}>{sub}</div>
+                    </div>
+                    <span style={{ fontSize: 14, fontWeight: 700, color: v === NA ? "rgba(255,255,255,0.3)" : "#fff", fontFamily: "JetBrains Mono" }}>{v}</span>
                   </div>
                 ))}
                 <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.3)", marginTop: 10 }}>
-                  Representative data for prototype. Wire to CBN / NGX feeds for live values.
+                  {market ? "Sources: NGX, ExchangeRate-API, World Bank. Refreshed every 15 min." : "Representative data — live feed unavailable right now."}
                 </div>
               </div>
             </div>
@@ -794,8 +954,16 @@ export default function App() {
                   <span style={{ padding: "6px 14px", borderRadius: 8, fontWeight: 700, fontSize: 13, background: `${RATING_COLOR[sel.rating]}22`, color: RATING_COLOR[sel.rating], border: `1px solid ${RATING_COLOR[sel.rating]}55` }}>AI Rating: {sel.rating}</span>
                 )}
                 <div style={{ textAlign: "right" }}>
-                  <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "JetBrains Mono" }}>₦{sel.price.toLocaleString()}</div>
-                  <div style={{ color: sel.chg >= 0 ? ACCENT : RED, fontWeight: 700, fontSize: 13 }}>{sel.chg >= 0 ? "▲" : "▼"} {Math.abs(sel.chg)}% (1D)</div>
+                  {(() => {
+                    const px = cd.price ?? sel.price;
+                    const ch = cd.changePct ?? sel.chg;
+                    return (
+                      <>
+                        <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "JetBrains Mono" }}>₦{px.toLocaleString()}</div>
+                        <div style={{ color: ch >= 0 ? ACCENT : RED, fontWeight: 700, fontSize: 13 }}>{ch >= 0 ? "▲" : "▼"} {Math.abs(ch)}% (1D)</div>
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
             </div>
@@ -807,40 +975,95 @@ export default function App() {
               </div>
             )}
 
-            {has(sel.reason) && (
-              <div style={{ marginTop: 12, fontSize: 13, lineHeight: 1.6, color: "rgba(255,255,255,0.7)", background: "rgba(0,0,0,0.3)", borderLeft: `3px solid ${ACCENT}`, padding: "12px 14px", borderRadius: 6 }}>
-                <strong style={{ color: ACCENT }}>AI reasoning. </strong>{sel.reason}
+            {/* Live NGX price history + key stats */}
+            <div className="glass" style={{ borderRadius: 16, padding: 18, marginTop: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+                <div>
+                  <div style={{ fontFamily: "Sora", fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Price — last month</div>
+                  <div style={{ fontSize: 11.5, color: "rgba(255,255,255,0.4)" }}>
+                    {cd.loading ? "Loading NGX data…" : cd.error ? "NGX data unavailable right now." : `Daily close (₦) · NGX${cd.asOf ? ` · ${cd.asOf}` : ""}`}
+                    {cd.history?.length > 1 && (() => {
+                      const ch = pctChange(cd.history[cd.history.length - 1][1], cd.history[0][1]);
+                      return <span style={{ marginLeft: 8, fontFamily: "JetBrains Mono", color: ch >= 0 ? ACCENT : RED }}>{signedPct(ch)} over period</span>;
+                    })()}
+                  </div>
+                </div>
+              </div>
+              {cd.history?.length > 1 ? (
+                <ResponsiveContainer width="100%" height={200}>
+                  <AreaChart data={cd.history.map(([t, v]) => ({ t, v }))} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="gc" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor={BLUE} stopOpacity={0.3} />
+                        <stop offset="100%" stopColor={BLUE} stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
+                    <XAxis dataKey="t" type="number" scale="time" domain={["dataMin", "dataMax"]} stroke="rgba(255,255,255,0.3)" fontSize={11}
+                      tickFormatter={(t) => fmtTick(t, "1M")} minTickGap={28} />
+                    <YAxis stroke="rgba(255,255,255,0.3)" fontSize={11} domain={["auto", "auto"]} width={56} />
+                    <Tooltip contentStyle={tipStyle} labelFormatter={(t) => fmtDate(t)} formatter={(v) => [`₦${Number(v).toLocaleString()}`, "Close"]} />
+                    <Area type="linear" dataKey="v" stroke={BLUE} strokeWidth={2} fill="url(#gc)" dot={false} activeDot={{ r: 4 }} isAnimationActive={false} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              ) : (
+                <div style={{ height: 80, display: "flex", alignItems: "center", fontSize: 12, color: "rgba(255,255,255,0.35)" }}>
+                  {cd.loading ? "Loading…" : "No recent price history available."}
+                </div>
+              )}
+            </div>
+
+            <ProfileSection title="Market Data · NGX" note={cd.error ? "Couldn't reach NGX — showing what the live price feed has." : undefined}>
+              <Metric label="Last Price" value={`₦${(cd.price ?? sel.price).toLocaleString()}`} />
+              <Metric label="Market Cap" value={cd.marketCap ? nairaBig(cd.marketCap) : NA} />
+              <Metric label="52-Week Range" value={cd.low52 != null && cd.high52 != null ? `₦${cd.low52}–${cd.high52}` : NA} />
+              <Metric label="Day Range" value={cd.dayLow != null && cd.dayHigh != null ? `₦${cd.dayLow}–${cd.dayHigh}` : NA} />
+              <Metric label="Volume" value={cd.volume != null ? countBig(cd.volume) : NA} />
+              <Metric label="Value Traded" value={cd.valueTraded != null ? nairaBig(cd.valueTraded) : NA} />
+              <Metric label="Shares Outstanding" value={cd.sharesOutstanding ? countBig(cd.sharesOutstanding) : NA} />
+              <Metric label="Board" value={cd.board || NA} />
+            </ProfileSection>
+
+            {sel.hasAnalytics && (
+              <div style={{ marginTop: 12, fontSize: 11.5, lineHeight: 1.6, color: "rgba(255,255,255,0.55)", background: "rgba(0,0,0,0.3)", borderLeft: `3px solid ${AMBER}`, padding: "10px 14px", borderRadius: 6 }}>
+                <strong style={{ color: AMBER }}>Estimates below are illustrative. </strong>
+                Ratios, growth, dividends and AI scores are sample figures — no free public source publishes NGX fundamentals. Market data above is live.
               </div>
             )}
 
-            <ProfileSection title="Financial Metrics">
-              <Metric label="Last Price" value={`₦${sel.price.toLocaleString()}`} />
+            {has(sel.reason) && (
+              <div style={{ marginTop: 12, fontSize: 13, lineHeight: 1.6, color: "rgba(255,255,255,0.7)", background: "rgba(0,0,0,0.3)", borderLeft: `3px solid ${ACCENT}`, padding: "12px 14px", borderRadius: 6 }}>
+                <strong style={{ color: ACCENT }}>Analyst view (illustrative). </strong>{sel.reason}
+              </div>
+            )}
+
+            <ProfileSection title="Financial Health" sample={sel.hasAnalytics}>
               <Metric label="Financial Health" value={fmt(sel.health, "/100")} color={has(sel.health) ? (sel.health > 75 ? ACCENT : sel.health > 60 ? AMBER : RED) : undefined} />
               <Metric label="Free Cash Flow" value={fmt(sel.fcf)} />
             </ProfileSection>
 
-            <ProfileSection title="Growth Rates">
+            <ProfileSection title="Growth Rates" sample={sel.hasAnalytics}>
               <Metric label="Revenue Growth" value={fmt(sel.rev, "%")} color={has(sel.rev) ? (sel.rev >= 0 ? ACCENT : RED) : undefined} />
               <Metric label="EPS Growth" value={fmt(sel.eps, "%")} color={has(sel.eps) ? (sel.eps >= 0 ? ACCENT : RED) : undefined} />
             </ProfileSection>
 
-            <ProfileSection title="Valuation Ratios">
+            <ProfileSection title="Valuation Ratios" sample={sel.hasAnalytics}>
               <Metric label="P/E" value={fmt(sel.pe)} />
               <Metric label="P/B" value={fmt(sel.pb)} />
               <Metric label="ROE" value={fmt(sel.roe, "%")} />
               <Metric label="Debt / Equity" value={fmt(sel.de)} />
             </ProfileSection>
 
-            <ProfileSection title="Dividend Performance">
+            <ProfileSection title="Dividend Performance" sample={sel.hasAnalytics}>
               <Metric label="Dividend Yield" value={fmt(sel.div, "%")} color={has(sel.div) ? ACCENT : undefined} />
             </ProfileSection>
 
-            <ProfileSection title="Risk Scores">
+            <ProfileSection title="Risk Scores" sample={sel.hasAnalytics}>
               <Metric label="Risk Level" value={fmt(sel.risk)} color={has(sel.risk) ? RISK_COLOR[sel.risk] : undefined} />
               <Metric label="Price Momentum (1D)" value={momentumOf(sel.chg)} color={sel.chg >= 0 ? ACCENT : RED} />
             </ProfileSection>
 
-            <ProfileSection title="AI Scores" note={sel.hasAnalytics ? "⚠ Model probability estimates — not guarantees. Wide confidence around all horizons." : undefined}>
+            <ProfileSection title="AI Scores" sample={sel.hasAnalytics} note={sel.hasAnalytics ? "⚠ Model probability estimates — not guarantees. Wide confidence around all horizons." : undefined}>
               <Metric label="AI Rating" value={fmt(sel.rating)} color={has(sel.rating) ? RATING_COLOR[sel.rating] : undefined} />
               <Metric label="Outperform · 30d" value={fmt(sel.p30, "%")} />
               <Metric label="Outperform · 90d" value={fmt(sel.p90, "%")} />
@@ -1113,7 +1336,7 @@ export default function App() {
         {tab === "benchmark" && (
           <>
             <div className="glass" style={{ borderRadius: 16, padding: 20 }}>
-              <div style={{ fontFamily: "Sora", fontWeight: 800, fontSize: 18 }}>Nigeria vs. U.S. Markets</div>
+              <div style={{ fontFamily: "Sora", fontWeight: 800, fontSize: 18 }}>Nigeria vs. U.S. Markets<SampleTag /></div>
               <div style={{ fontSize: 12.5, color: "rgba(255,255,255,0.5)", marginTop: 4, marginBottom: 16, maxWidth: 620, lineHeight: 1.5 }}>
                 Home-country bias traps investors. The question is never "did NGX go up?" but "did it beat global alternatives after adjusting for volatility and naira depreciation?" All series rebased to 100.
               </div>
@@ -1161,7 +1384,7 @@ export default function App() {
         )}
 
         <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.3)", marginTop: 26, lineHeight: 1.6, textAlign: "center" }}>
-          Prototype with representative data. Not investment advice. AI ratings and probability scores are model estimates with material uncertainty, not guarantees of future returns.
+          Live NGX prices, index and market data; anything tagged SAMPLE is illustrative. Not investment advice. AI ratings and probability scores are model estimates with material uncertainty, not guarantees of future returns.
         </div>
       </div>
     </div>
