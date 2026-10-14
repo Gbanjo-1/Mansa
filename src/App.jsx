@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useContext, createContext, useRef } from "react";
 import {
   LineChart, Line, AreaChart, Area, BarChart, Bar, RadarChart, Radar,
   PolarGrid, PolarAngleAxis, PolarRadiusAxis, XAxis, YAxis, CartesianGrid,
@@ -193,15 +193,51 @@ function CompanyLogo({ c, size = 28 }) {
   );
 }
 
+// Beginner mode: plain-English explanation under each metric.
+const BeginnerCtx = createContext(false);
+const EXPLAIN = {
+  "Last Price": "Latest traded price of one share on the NGX.",
+  "Financial Health": "Overall balance-sheet strength score. Above 75 is solid.",
+  "Free Cash Flow": "Cash left after running and investing in the business — what can fund dividends.",
+  "Revenue Growth": "How fast sales grew versus last year.",
+  "EPS Growth": "How fast profit per share grew. Negative means earnings fell.",
+  "P/E": "Price ÷ earnings per share. Lower can mean cheaper — compare within a sector.",
+  "P/B": "Price ÷ book value. Below 1 means the market values it under its net assets.",
+  "ROE": "Profit made on shareholders' money. 15%+ is generally strong.",
+  "Debt / Equity": "Borrowing relative to shareholders' money. Higher = more leverage risk.",
+  "Dividend Yield": "Yearly dividend as a % of the share price.",
+  "Risk Level": "Overall volatility and business risk rating.",
+  "Price Momentum (1D)": "Direction and strength of today's price move.",
+  "AI Rating": "Model's overall view combining value, quality and momentum.",
+  "Outperform · 30d": "Model's estimated chance of beating the NGX index over 30 days.",
+  "Outperform · 90d": "Estimated chance of beating the index over 90 days.",
+  "Outperform · 1yr": "Estimated chance of beating the index over 1 year.",
+  "Outperform · 3yr": "Estimated chance of beating the index over 3 years.",
+};
+
 function Metric({ label, value, color }) {
+  const beginner = useContext(BeginnerCtx);
   const na = value === NA;
   return (
     <div style={{ background: "rgba(255,255,255,0.03)", borderRadius: 10, padding: "10px 12px", border: `1px solid ${BORDER}` }}>
       <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.45)", textTransform: "uppercase" }}>{label}</div>
       <div style={{ fontSize: 16, fontWeight: 700, fontFamily: "JetBrains Mono", marginTop: 3, color: na ? "rgba(255,255,255,0.28)" : color || "#fff" }}>{value}</div>
+      {beginner && EXPLAIN[label] && (
+        <div style={{ fontSize: 10.5, lineHeight: 1.45, color: "rgba(255,255,255,0.45)", marginTop: 6 }}>{EXPLAIN[label]}</div>
+      )}
     </div>
   );
 }
+
+const SampleTag = () => (
+  <span title="Representative figure — not live data" style={{ marginLeft: 6, fontSize: 9, letterSpacing: 0.6, padding: "1px 5px", borderRadius: 4, border: `1px solid ${AMBER}55`, color: AMBER, verticalAlign: "middle" }}>SAMPLE</span>
+);
+
+// Safe browser storage (private windows / blocked storage just fall back to defaults).
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* ignore */ } },
+};
 
 function ProfileSection({ title, note, children }) {
   return (
@@ -215,13 +251,13 @@ function ProfileSection({ title, note, children }) {
 
 /* ============================================================ */
 
-function Gauge({ label, value, suffix = "", invert = false, hint }) {
+function Gauge({ label, value, suffix = "", invert = false, hint, sample }) {
   const pct = Math.max(0, Math.min(100, value));
   const good = invert ? 100 - pct : pct;
   const color = good > 66 ? ACCENT : good > 40 ? AMBER : RED;
   return (
     <div style={{ background: PANEL, border: `1px solid ${BORDER}`, borderRadius: 14, padding: "14px 16px" }}>
-      <div style={{ fontSize: 11, letterSpacing: 0.5, color: "rgba(255,255,255,0.5)", textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontSize: 11, letterSpacing: 0.5, color: "rgba(255,255,255,0.5)", textTransform: "uppercase" }}>{label}{sample && <SampleTag />}</div>
       <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginTop: 6 }}>
         <span style={{ fontSize: 26, fontWeight: 700, color }}>{value}{suffix}</span>
       </div>
@@ -233,12 +269,13 @@ function Gauge({ label, value, suffix = "", invert = false, hint }) {
   );
 }
 
-function Stat({ label, value, change, fmt }) {
+function Stat({ label, value, change, fmt, sample, sub }) {
   const up = change >= 0;
   return (
     <div style={{ background: PANEL, border: `1px solid ${BORDER}`, borderRadius: 14, padding: "14px 16px" }}>
-      <div style={{ fontSize: 11, letterSpacing: 0.5, color: "rgba(255,255,255,0.5)", textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontSize: 11, letterSpacing: 0.5, color: "rgba(255,255,255,0.5)", textTransform: "uppercase" }}>{label}{sample && <SampleTag />}</div>
       <div style={{ fontSize: 24, fontWeight: 700, marginTop: 6, fontFamily: "'JetBrains Mono', monospace" }}>{fmt(value)}</div>
+      {sub && <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", marginTop: 4 }}>{sub}</div>}
       {change !== undefined && (
         <div style={{ fontSize: 12.5, marginTop: 4, color: up ? ACCENT : RED, fontWeight: 600 }}>
           {up ? "▲" : "▼"} {Math.abs(change)}%
@@ -259,7 +296,9 @@ export default function App() {
   const [dataNote, setDataNote] = useState("Showing curated sample — loading live NGX prices…");
   const [sel, setSel] = useState(SEED[2]);
   const [cmp, setCmp] = useState([SEED[2], SEED[3], SEED[0]]);
-  const [advanced, setAdvanced] = useState(true);
+  const [advanced, setAdvanced] = useState(() => store.get("mansa.advanced", true));
+  useEffect(() => { store.set("mansa.advanced", advanced); }, [advanced]);
+  const [live, setLive] = useState(false);
 
   // Fetch the full NGX universe + live prices from our serverless proxy (free,
   // public AFX data). Curated names keep their analytics + get live price;
@@ -274,14 +313,15 @@ export default function App() {
         const merged = data.stocks.map((s) => {
           const rich = seedByT[s.t];
           return rich
-            ? { ...rich, price: s.price, chg: s.chg, vol: s.vol }
-            : { t: s.t, n: s.n, sector: s.sector || "—", price: s.price, chg: s.chg, vol: s.vol, hasAnalytics: false };
+            ? { ...rich, price: s.price, chg: s.chg, vol: s.vol, lv: true }
+            : { t: s.t, n: s.n, sector: s.sector || "—", price: s.price, chg: s.chg, vol: s.vol, hasAnalytics: false, lv: true };
         });
         const liveTs = new Set(merged.map((c) => c.t));
         SEEDED.forEach((c) => { if (!liveTs.has(c.t)) merged.push(c); });
         merged.sort((a, b) => a.t.localeCompare(b.t));
         if (cancelled) return;
         setCompanies(merged);
+        setLive(true);
         setSel((prev) => merged.find((c) => c.t === prev.t) || prev);
         setDataNote(`Live NGX data · ${data.count} companies · updated ${new Date(data.updated).toLocaleTimeString()}`);
       })
@@ -293,6 +333,7 @@ export default function App() {
   const [chat, setChat] = useState([]);
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
+  useEffect(() => { setChat([]); setInput(""); }, [sel.t]);
 
   // Screener
   const [screen, setScreen] = useState("all");
@@ -306,12 +347,30 @@ export default function App() {
   });
 
   // Watchlists
-  const [lists, setLists] = useState({
+  const [lists, setLists] = useState(() => store.get("mansa.watchlists", {
     "Dividend Portfolio": ["GTCO", "ZENITHBANK"],
     "Growth Portfolio": ["MTNN", "BUACEMENT"],
     "Value Portfolio": ["DANGCEM"],
-  });
-  const [activeList, setActiveList] = useState("Dividend Portfolio");
+  }));
+  useEffect(() => { store.set("mansa.watchlists", lists); }, [lists]);
+  const [activeList, setActiveList] = useState(() => Object.keys(store.get("mansa.watchlists", {}))[0] || "Dividend Portfolio");
+  const [wlSearch, setWlSearch] = useState("");
+  const [newList, setNewList] = useState("");
+  const createList = () => {
+    const name = newList.trim();
+    if (!name || lists[name]) return;
+    setLists((p) => ({ ...p, [name]: [] }));
+    setActiveList(name);
+    setNewList("");
+  };
+  const deleteList = (name) => {
+    setLists((p) => {
+      const { [name]: _, ...rest } = p;
+      const next = Object.keys(rest).length ? rest : { "My Watchlist": [] };
+      setActiveList(Object.keys(next)[0]);
+      return next;
+    });
+  };
 
   // Global search
   const [query, setQuery] = useState("");
@@ -323,6 +382,53 @@ export default function App() {
         c.sector.toLowerCase().includes(query.toLowerCase())
       )
     : [];
+  // Shareable links: #/company/GTCO, #/compare, #/watchlist …
+  const TABS = ["dashboard", "company", "compare", "screener", "watchlist", "benchmark"];
+  const pendingTicker = useRef(null);
+  const readHash = () => {
+    const [, t, ticker] = (window.location.hash || "").split("/");
+    if (t && TABS.includes(t)) setTab(t);
+    if (ticker) pendingTicker.current = decodeURIComponent(ticker).toUpperCase();
+  };
+  useEffect(() => {
+    readHash();
+    window.addEventListener("hashchange", readHash);
+    return () => window.removeEventListener("hashchange", readHash);
+  }, []);
+  useEffect(() => {
+    // Resolve a linked ticker once the company universe (incl. live feed) has it.
+    const want = pendingTicker.current;
+    if (!want) return;
+    const c = companies.find((x) => x.t === want);
+    if (c) { setSel(c); setTab("company"); pendingTicker.current = null; }
+    else if (live) pendingTicker.current = null; // unknown ticker — give up
+  });
+  useEffect(() => {
+    if (pendingTicker.current) return; // don't overwrite a link we haven't resolved yet
+    const h = tab === "company" ? `#/company/${sel.t}` : `#/${tab}`;
+    if (window.location.hash !== h) window.history.replaceState(null, "", h);
+  }, [tab, sel.t]);
+
+  // Live market breadth + sector heat map computed from the NGX feed.
+  const liveOnly = useMemo(() => (live ? companies.filter((c) => c.lv) : companies), [companies, live]);
+  const breadth = useMemo(() => {
+    const companies = liveOnly;
+    const up = companies.filter((c) => c.chg > 0).length;
+    const down = companies.filter((c) => c.chg < 0).length;
+    const avg = companies.length ? companies.reduce((s, c) => s + (c.chg || 0), 0) / companies.length : 0;
+    return { up, down, flat: companies.length - up - down, avg: +avg.toFixed(2), total: companies.length };
+  }, [liveOnly]);
+  const liveSectors = useMemo(() => {
+    const g = {};
+    liveOnly.forEach((c) => {
+      if (!c.sector || c.sector === "—") return;
+      (g[c.sector] ||= []).push(c.chg || 0);
+    });
+    return Object.entries(g)
+      .map(([name, arr]) => ({ name, perf: +(arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(2), count: arr.length }))
+      .sort((a, b) => b.count - a.count);
+  }, [liveOnly]);
+
   const pickCompany = (c) => {
     setSel(c);
     setTab("company");
@@ -354,27 +460,19 @@ export default function App() {
     setInput("");
     setThinking(true);
     try {
-      const ctx = `You are a Nigerian Stock Exchange equity analyst. Answer in plain, concise language (under 130 words). Be balanced, mention risks, and never give guarantees.
-
-Selected company data (representative prototype figures):
-${JSON.stringify(sel)}
-
-Always end with: "Not investment advice."`;
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          system: ctx,
+          company: sel,
           messages: next.map((m) => ({ role: m.role, content: m.content })),
         }),
       });
-      const data = await res.json();
-      const text = data.content.filter((b) => b.type === "text").map((b) => b.text).join("\n").trim();
-      setChat([...next, { role: "assistant", content: text || "No response." }]);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      setChat([...next, { role: "assistant", content: data.text || "No response." }]);
     } catch (e) {
-      setChat([...next, { role: "assistant", content: "Error reaching the AI service. Try again." }]);
+      setChat([...next, { role: "assistant", content: `⚠ ${e.message || "Error reaching the AI service. Try again."}`, error: true }]);
     }
     setThinking(false);
   }
@@ -398,6 +496,7 @@ Always end with: "Not investment advice."`;
   ];
 
   return (
+    <BeginnerCtx.Provider value={!advanced}>
     <div style={{
       minHeight: "100vh", background: "#000", color: "#fff",
       fontFamily: "'Inter', system-ui, sans-serif",
@@ -409,6 +508,13 @@ Always end with: "Not investment advice."`;
         .glass{background:rgba(255,255,255,.04);backdrop-filter:blur(12px);border:1px solid ${BORDER}}
         .row:hover{background:rgba(255,255,255,.05)}
         @keyframes fade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+        .g-main{display:grid;grid-template-columns:2fr 1fr;gap:14px}
+        .g-half{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+        .hide-sm{}
+        @media (max-width: 760px){
+          .g-main,.g-half{grid-template-columns:1fr}
+          .hide-sm{display:none !important}
+        }
       `}</style>
 
       {/* Header */}
@@ -425,12 +531,20 @@ Always end with: "Not investment advice."`;
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-            <span style={{ fontSize: 12, color: ACCENT, fontFamily: "JetBrains Mono" }}>● NGX ASI {MARKET.asi.toLocaleString()}</span>
-            <button onClick={() => setAdvanced(!advanced)} style={{
+            {live ? (
+              <span title="Live market breadth: advancers / decliners today" style={{ fontSize: 12, fontFamily: "JetBrains Mono", display: "flex", gap: 8 }}>
+                <span style={{ color: ACCENT }}>▲ {breadth.up}</span>
+                <span style={{ color: RED }}>▼ {breadth.down}</span>
+                <span style={{ color: "rgba(255,255,255,0.4)" }}>— {breadth.flat}</span>
+              </span>
+            ) : (
+              <span style={{ fontSize: 12, color: "rgba(255,255,255,0.4)", fontFamily: "JetBrains Mono" }}>● loading live data…</span>
+            )}
+            <button onClick={() => setAdvanced(!advanced)} title={advanced ? "Switch to Beginner mode: plain-English explanations under every metric" : "Switch to Advanced mode: hide explanations"} style={{
               fontSize: 11.5, padding: "6px 12px", borderRadius: 20, cursor: "pointer",
               background: advanced ? ACCENT : "transparent", color: advanced ? "#000" : "#fff",
               border: `1px solid ${advanced ? ACCENT : BORDER}`, fontWeight: 600,
-            }}>{advanced ? "Advanced" : "Beginner"}</button>
+            }}>{advanced ? "Advanced mode" : "Beginner mode"}</button>
           </div>
         </div>
 
@@ -507,16 +621,20 @@ Always end with: "Not investment advice."`;
         {tab === "dashboard" && (
           <>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
-              <Stat label="NGX All-Share" value={MARKET.asi} change={MARKET.asiChange} fmt={(v) => v.toLocaleString()} />
-              <Stat label="Market Cap (₦tn)" value={MARKET.mktCap} change={MARKET.mktCapChange} fmt={(v) => v.toFixed(1)} />
-              <Gauge label="AI Opportunity" value={MARKET.opportunity} hint="Composite of value, momentum & flow signals" />
-              <Gauge label="Market Risk" value={MARKET.risk} invert hint="Higher = more risk. Lower score is better" />
-              <Gauge label="Sentiment" value={MARKET.sentiment} hint="News + announcements, last 14 days" />
+              {live && (
+                <Stat label="Market Breadth" value={breadth} change={breadth.avg} fmt={(b) => `${b.up}▲ ${b.down}▼`}
+                  sub={`Avg move today across ${breadth.total} stocks`} />
+              )}
+              <Stat label="NGX All-Share" value={MARKET.asi} change={MARKET.asiChange} fmt={(v) => v.toLocaleString()} sample />
+              <Stat label="Market Cap (₦tn)" value={MARKET.mktCap} change={MARKET.mktCapChange} fmt={(v) => v.toFixed(1)} sample />
+              <Gauge label="AI Opportunity" value={MARKET.opportunity} hint="Composite of value, momentum & flow signals" sample />
+              <Gauge label="Market Risk" value={MARKET.risk} invert hint="Higher = more risk. Lower score is better" sample />
+              <Gauge label="Sentiment" value={MARKET.sentiment} hint="News + announcements, last 14 days" sample />
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14, marginTop: 14 }}>
+            <div className="g-main" style={{ marginTop: 14 }}>
               <div className="glass" style={{ borderRadius: 16, padding: 18 }}>
-                <div style={{ fontFamily: "Sora", fontWeight: 700, fontSize: 14, marginBottom: 4 }}>NGX All-Share Index</div>
+                <div style={{ fontFamily: "Sora", fontWeight: 700, fontSize: 14, marginBottom: 4 }}>NGX All-Share Index<SampleTag /></div>
                 <div style={{ fontSize: 11.5, color: "rgba(255,255,255,0.4)", marginBottom: 10 }}>Trailing 9 months · index points</div>
                 <ResponsiveContainer width="100%" height={230}>
                   <AreaChart data={asiSeries}>
@@ -536,7 +654,7 @@ Always end with: "Not investment advice."`;
               </div>
 
               <div className="glass" style={{ borderRadius: 16, padding: 18 }}>
-                <div style={{ fontFamily: "Sora", fontWeight: 700, fontSize: 14, marginBottom: 12 }}>Macro Snapshot</div>
+                <div style={{ fontFamily: "Sora", fontWeight: 700, fontSize: 14, marginBottom: 12 }}>Macro Snapshot<SampleTag /></div>
                 {[
                   ["Inflation", `${MARKET.inflation}%`, RED],
                   ["Naira Strength", `${MARKET.naira}/100`, AMBER],
@@ -556,11 +674,14 @@ Always end with: "Not investment advice."`;
 
             {/* Sector heatmap */}
             <div className="glass" style={{ borderRadius: 16, padding: 18, marginTop: 14 }}>
-              <div style={{ fontFamily: "Sora", fontWeight: 700, fontSize: 14, marginBottom: 12 }}>Sector Performance Heat Map</div>
+              <div style={{ fontFamily: "Sora", fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Sector Performance Heat Map{!live && <SampleTag />}</div>
+              <div style={{ fontSize: 11.5, color: "rgba(255,255,255,0.4)", marginBottom: 12 }}>
+                {live ? "Live · average 1-day move of listed stocks in each sector" : "Representative figures until live data loads"}
+              </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(120px,1fr))", gap: 8 }}>
-                {sectors.map((s) => {
+                {(live && liveSectors.length ? liveSectors : sectors).map((s) => {
                   const pos = s.perf >= 0;
-                  const intensity = Math.min(1, Math.abs(s.perf) / 3.5);
+                  const intensity = Math.min(1, Math.abs(s.perf) / (live ? 2.5 : 3.5));
                   return (
                     <div key={s.name} style={{
                       borderRadius: 10, padding: "14px 12px",
@@ -571,7 +692,7 @@ Always end with: "Not investment advice."`;
                       <div style={{ fontSize: 17, fontWeight: 700, fontFamily: "JetBrains Mono", marginTop: 4 }}>
                         {pos ? "+" : ""}{s.perf}%
                       </div>
-                      <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)" }}>₦{s.cap}tn cap</div>
+                      <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)" }}>{s.count ? `${s.count} stock${s.count > 1 ? "s" : ""}` : `₦${s.cap}tn cap`}</div>
                     </div>
                   );
                 })}
@@ -579,7 +700,7 @@ Always end with: "Not investment advice."`;
             </div>
 
             {/* Gainers / Losers */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginTop: 14 }}>
+            <div className="g-half" style={{ marginTop: 14 }}>
               {[["Top Gainers", true], ["Top Losers", false]].map(([title, gain]) => (
                 <div key={title} className="glass" style={{ borderRadius: 16, padding: 18 }}>
                   <div style={{ fontFamily: "Sora", fontWeight: 700, fontSize: 14, marginBottom: 10 }}>{title}</div>
@@ -663,7 +784,12 @@ Always end with: "Not investment advice."`;
                   </div>
                 </div>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+                <button onClick={(e) => {
+                  const url = `${window.location.origin}${window.location.pathname}#/company/${sel.t}`;
+                  const btn = e.currentTarget;
+                  navigator.clipboard?.writeText(url).then(() => { btn.textContent = "Link copied ✓"; setTimeout(() => { btn.textContent = "Copy link"; }, 1600); }).catch(() => {});
+                }} style={{ fontSize: 11.5, padding: "6px 12px", borderRadius: 8, cursor: "pointer", background: "transparent", border: `1px solid ${BORDER}`, color: "rgba(255,255,255,0.7)", fontWeight: 600 }}>Copy link</button>
                 {has(sel.rating) && (
                   <span style={{ padding: "6px 14px", borderRadius: 8, fontWeight: 700, fontSize: 13, background: `${RATING_COLOR[sel.rating]}22`, color: RATING_COLOR[sel.rating], border: `1px solid ${RATING_COLOR[sel.rating]}55` }}>AI Rating: {sel.rating}</span>
                 )}
@@ -723,13 +849,13 @@ Always end with: "Not investment advice."`;
             </ProfileSection>
 
             {/* AI Research Assistant */}
-            {sel.hasAnalytics && (
+            {(
             <div className="glass" style={{ borderRadius: 16, padding: 18, marginTop: 14 }}>
               <div style={{ fontFamily: "Sora", fontWeight: 700, fontSize: 14, marginBottom: 4 }}>
                 AI Research Assistant <span style={{ color: ACCENT }}>· {sel.t}</span>
               </div>
               <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", marginBottom: 12 }}>
-                Ask anything about {sel.n}. Answers are AI-generated from the prototype data above.
+                Ask anything about {sel.n}. Answers are AI-generated from the data above{sel.hasAnalytics ? "" : " (live price only — fundamentals unavailable)"}.
               </div>
 
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
@@ -749,7 +875,7 @@ Always end with: "Not investment advice."`;
                       maxWidth: "85%", padding: "10px 13px", borderRadius: 12, fontSize: 13, lineHeight: 1.55,
                       background: m.role === "user" ? "rgba(0,229,160,0.12)" : "rgba(255,255,255,0.04)",
                       border: `1px solid ${m.role === "user" ? "rgba(0,229,160,0.3)" : BORDER}`,
-                      color: m.role === "user" ? "#fff" : "rgba(255,255,255,0.82)", whiteSpace: "pre-wrap",
+                      color: m.error ? AMBER : m.role === "user" ? "#fff" : "rgba(255,255,255,0.82)", whiteSpace: "pre-wrap",
                     }}>{m.content}</div>
                   ))}
                   {thinking && <div style={{ alignSelf: "flex-start", fontSize: 12, color: "rgba(255,255,255,0.4)", padding: "4px 6px" }}>Analyzing…</div>}
@@ -899,54 +1025,85 @@ Always end with: "Not investment advice."`;
 
         {/* ====================== WATCHLIST ====================== */}
         {tab === "watchlist" && (() => {
-          const items = companies.filter((c) => (lists[activeList] || []).includes(c.t));
-          const avgDiv = items.length ? (items.reduce((s, c) => s + c.div, 0) / items.length).toFixed(1) : "0";
-          const avgHealth = items.length ? Math.round(items.reduce((s, c) => s + c.health, 0) / items.length) : 0;
-          const sectorCount = new Set(items.map((c) => c.sector)).size;
+          const tickers = lists[activeList] || [];
+          const items = companies.filter((c) => tickers.includes(c.t));
+          const avgOf = (key) => {
+            const vals = items.map((c) => c[key]).filter((v) => typeof v === "number");
+            return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+          };
+          const avgDiv = avgOf("div");
+          const avgHealth = avgOf("health");
+          const avgChg = avgOf("chg");
+          const sectorCount = new Set(items.map((c) => c.sector).filter((x) => x && x !== "—")).size;
+          const q = wlSearch.trim().toLowerCase();
+          const addable = q
+            ? companies.filter((c) => !tickers.includes(c.t) && (c.t.toLowerCase().includes(q) || c.n.toLowerCase().includes(q) || c.sector.toLowerCase().includes(q))).slice(0, 25)
+            : [];
+          const row = (c, inList) => (
+            <div key={c.t} className="row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "10px 8px", borderRadius: 8, borderBottom: `1px solid ${BORDER}` }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, cursor: "pointer" }} onClick={() => { setSel(c); setTab("company"); }}>
+                <CompanyLogo c={c} size={26} />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontFamily: "JetBrains Mono", fontWeight: 700, fontSize: 13 }}>{c.t}</div>
+                  <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.n}{c.sector && c.sector !== "—" ? ` · ${c.sector}` : ""}</div>
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 14, flexShrink: 0 }}>
+                <span className="hide-sm" style={{ fontSize: 12, fontFamily: "JetBrains Mono", color: "rgba(255,255,255,0.7)" }}>₦{c.price.toLocaleString()}</span>
+                <span style={{ fontSize: 12, fontFamily: "JetBrains Mono", color: c.chg >= 0 ? ACCENT : RED, minWidth: 52, textAlign: "right" }}>{c.chg >= 0 ? "+" : ""}{c.chg}%</span>
+                <button onClick={() => toggleList(c.t)} style={{
+                  fontSize: 11.5, padding: "5px 12px", borderRadius: 16, cursor: "pointer", fontWeight: 600,
+                  border: `1px solid ${inList ? RED : ACCENT}`, background: "transparent", color: inList ? RED : ACCENT,
+                }}>{inList ? "Remove" : "Add"}</button>
+              </div>
+            </div>
+          );
           return (
             <>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 16 }}>
                 {Object.keys(lists).map((name) => (
                   <button key={name} onClick={() => setActiveList(name)} style={{
                     fontSize: 12.5, padding: "8px 14px", borderRadius: 8, cursor: "pointer", fontWeight: 600,
                     border: `1px solid ${activeList === name ? ACCENT : BORDER}`,
                     background: activeList === name ? "rgba(0,229,160,0.12)" : "transparent",
                     color: activeList === name ? ACCENT : "rgba(255,255,255,0.6)",
-                  }}>{name}</button>
+                  }}>{name} <span style={{ opacity: 0.6 }}>({(lists[name] || []).length})</span></button>
                 ))}
+                <div style={{ display: "flex", gap: 6 }}>
+                  <input value={newList} onChange={(e) => setNewList(e.target.value)} onKeyDown={(e) => e.key === "Enter" && createList()}
+                    placeholder="New list name…" maxLength={40}
+                    style={{ width: 150, background: "rgba(0,0,0,0.4)", border: `1px solid ${BORDER}`, borderRadius: 8, padding: "8px 10px", color: "#fff", fontSize: 12.5, outline: "none", fontFamily: "inherit" }} />
+                  <button onClick={createList} disabled={!newList.trim()} style={{ fontSize: 12.5, padding: "8px 12px", borderRadius: 8, cursor: newList.trim() ? "pointer" : "default", fontWeight: 700, border: "none", background: newList.trim() ? ACCENT : "rgba(255,255,255,0.08)", color: newList.trim() ? "#000" : "rgba(255,255,255,0.4)" }}>+ Create</button>
+                </div>
               </div>
 
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 12, marginBottom: 14 }}>
                 <Stat label="Holdings" value={items.length} fmt={(v) => v} />
-                <Stat label="Avg Div Yield" value={avgDiv} fmt={(v) => `${v}%`} />
-                <Stat label="Avg Health" value={avgHealth} fmt={(v) => `${v}/100`} />
+                <Stat label="Avg Move Today" value={avgChg} fmt={(v) => (v === null ? NA : `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`)} />
+                <Stat label="Avg Div Yield" value={avgDiv} fmt={(v) => (v === null ? NA : `${v.toFixed(1)}%`)} sub={avgDiv === null ? "No dividend data for these names" : undefined} />
+                <Stat label="Avg Health" value={avgHealth} fmt={(v) => (v === null ? NA : `${Math.round(v)}/100`)} />
                 <Stat label="Sectors" value={sectorCount} fmt={(v) => v} />
               </div>
 
               <div className="glass" style={{ borderRadius: 16, padding: 18 }}>
-                <div style={{ fontFamily: "Sora", fontWeight: 700, fontSize: 14, marginBottom: 12 }}>
-                  {activeList} — add or remove holdings
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+                  <div style={{ fontFamily: "Sora", fontWeight: 700, fontSize: 14 }}>{activeList}</div>
+                  <button onClick={() => deleteList(activeList)} style={{ fontSize: 11.5, padding: "5px 10px", borderRadius: 8, cursor: "pointer", background: "transparent", border: `1px solid ${BORDER}`, color: "rgba(255,255,255,0.5)" }}>Delete list</button>
                 </div>
-                {companies.map((c) => {
-                  const inList = (lists[activeList] || []).includes(c.t);
-                  return (
-                    <div key={c.t} className="row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 8px", borderRadius: 8, borderBottom: `1px solid ${BORDER}` }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <CompanyLogo c={c} size={24} />
-                        <span style={{ fontFamily: "JetBrains Mono", fontWeight: 700, fontSize: 13, minWidth: 110 }}>{c.t}</span>
-                        <span style={{ fontSize: 11.5, color: "rgba(255,255,255,0.4)" }}>{c.sector}</span>
-                      </div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-                        <span style={{ fontSize: 12, fontFamily: "JetBrains Mono", color: c.chg >= 0 ? ACCENT : RED }}>{c.chg >= 0 ? "+" : ""}{c.chg}%</span>
-                        <button onClick={() => toggleList(c.t)} style={{
-                          fontSize: 11.5, padding: "5px 12px", borderRadius: 16, cursor: "pointer", fontWeight: 600,
-                          border: `1px solid ${inList ? RED : ACCENT}`, background: "transparent",
-                          color: inList ? RED : ACCENT,
-                        }}>{inList ? "Remove" : "Add"}</button>
-                      </div>
-                    </div>
-                  );
-                })}
+                {items.length === 0 && (
+                  <div style={{ fontSize: 12.5, color: "rgba(255,255,255,0.4)", padding: "6px 2px 10px" }}>No holdings yet — search below to add companies.</div>
+                )}
+                {items.map((c) => row(c, true))}
+
+                <div style={{ position: "relative", marginTop: 16 }}>
+                  <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "rgba(255,255,255,0.35)", fontSize: 14 }}>⌕</span>
+                  <input value={wlSearch} onChange={(e) => setWlSearch(e.target.value)}
+                    placeholder={`Add to ${activeList} — search any of ${companies.length} NGX companies…`}
+                    style={{ width: "100%", boxSizing: "border-box", background: "rgba(0,0,0,0.4)", border: `1px solid ${BORDER}`, borderRadius: 10, padding: "11px 14px 11px 38px", color: "#fff", fontSize: 13, outline: "none", fontFamily: "inherit" }} />
+                </div>
+                {q && addable.length === 0 && <div style={{ fontSize: 12.5, color: "rgba(255,255,255,0.4)", padding: "10px 2px" }}>No matches for “{wlSearch}”.</div>}
+                {addable.map((c) => row(c, false))}
+                <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.3)", marginTop: 10 }}>Watchlists are saved in this browser.</div>
               </div>
             </>
           );
@@ -1008,5 +1165,6 @@ Always end with: "Not investment advice."`;
         </div>
       </div>
     </div>
+    </BeginnerCtx.Provider>
   );
 }
