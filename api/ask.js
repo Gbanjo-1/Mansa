@@ -29,7 +29,7 @@ export default async function handler(req, res) {
 
     const system = `You are a Nigerian Stock Exchange (NGX) equity analyst. Answer in plain, concise language (under 150 words). Be balanced, mention key risks (including naira/FX risk where relevant), and never give guarantees. If a figure is "N/A" or missing, say the data isn't available rather than inventing it.
 
-Selected company data (live price/sector from NGX; other figures are representative prototype estimates):
+Selected company data. Fields ngxLive, priceLastMonth and market are live NGX / market data. Fields pe, pb, roe, de, div, rev, eps, health, fcf, rating, risk and p30–p3y are illustrative estimates, not reported figures — if you rely on them, say they are estimates:
 ${JSON.stringify(company).slice(0, 3000)}
 
 Always end with: "Not investment advice."`;
