@@ -5,13 +5,19 @@
 // Set ANTHROPIC_API_KEY in Vercel → Project → Settings → Environment Variables.
 // Optional: ANTHROPIC_MODEL to override the default model.
 
-const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5";
+// Tried in order; a model that's retired or unavailable to the key falls through to the next.
+const MODELS = [process.env.ANTHROPIC_MODEL, "claude-sonnet-4-5", "claude-haiku-4-5"].filter(Boolean);
 const MAX_TURNS = 12;
 const MAX_CHARS = 2000;
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
   const key = process.env.ANTHROPIC_API_KEY;
+  // GET = status check, so the app can tell visitors whether the assistant is live.
+  if (req.method === "GET") {
+    res.setHeader("Cache-Control", "no-store");
+    return res.status(200).json({ configured: !!key });
+  }
+  if (req.method !== "POST") return res.status(405).json({ error: "GET or POST only" });
   if (!key) {
     return res.status(503).json({ error: "AI assistant isn't configured yet (missing ANTHROPIC_API_KEY on the server)." });
   }
@@ -29,23 +35,29 @@ export default async function handler(req, res) {
 
     const system = `You are a Nigerian Stock Exchange (NGX) equity analyst. Answer in plain, concise language (under 150 words). Be balanced, mention key risks (including naira/FX risk where relevant), and never give guarantees. If a figure is "N/A" or missing, say the data isn't available rather than inventing it.
 
-Selected company data. Fields ngxLive, priceLastMonth and market are live NGX / market data. Fields pe, pb, roe, de, div, rev, eps, health, fcf, rating, risk and p30–p3y are illustrative estimates, not reported figures — if you rely on them, say they are estimates:
+Selected company data. Fields ngxLive, priceLastMonth, pricePerformancePct and market are live NGX / market data. Fields pe, pb, roe, de, div, rev, eps, health, fcf, rating, risk and p30–p3y are illustrative estimates, not reported figures — if you rely on them, say they are estimates:
 ${JSON.stringify(company).slice(0, 3000)}
 
 Always end with: "Not investment advice."`;
 
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": key,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({ model: MODEL, max_tokens: 700, system, messages }),
-    });
-    const data = await r.json();
+    let r, data;
+    for (const model of MODELS) {
+      r = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-api-key": key,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({ model, max_tokens: 700, system, messages }),
+      });
+      data = await r.json().catch(() => ({}));
+      if (r.ok || r.status !== 404) break; // 404 = model not found → try the next one
+    }
     if (!r.ok) {
-      return res.status(502).json({ error: data?.error?.message || `Anthropic error ${r.status}` });
+      const msg = r.status === 401 ? "The server's ANTHROPIC_API_KEY was rejected — check the key in Vercel."
+        : data?.error?.message || `Anthropic error ${r.status}`;
+      return res.status(502).json({ error: msg });
     }
     const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n").trim();
     res.status(200).json({ text: text || "No response." });
