@@ -340,18 +340,37 @@ export default function App() {
   const [advanced, setAdvanced] = useState(() => store.get("mansa.advanced", true));
   useEffect(() => { store.set("mansa.advanced", advanced); }, [advanced]);
   const [live, setLive] = useState(false);
+  // Per-company NGX data (quote, key stats, ~1 month of daily closes), cached by symbol
+  const [coData, setCoData] = useState({});
+
+  // Auto-refresh: every 5 minutes while the tab is visible, whenever the tab
+  // comes back into view after 5+ minutes, and on demand via the Refresh button.
+  const REFRESH_MS = 5 * 60 * 1000;
+  const [refreshTick, setRefreshTick] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastRefresh, setLastRefresh] = useState(null);
+  const lastRefreshRef = useRef(0);
+  const refreshNow = () => { setCoData({}); setRefreshTick((n) => n + 1); };
+  useEffect(() => {
+    const id = setInterval(() => { if (document.visibilityState === "visible") refreshNow(); }, REFRESH_MS);
+    const onVis = () => {
+      if (document.visibilityState === "visible" && Date.now() - lastRefreshRef.current > REFRESH_MS) refreshNow();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVis); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Live market overview (ASI, market snapshot, FX, inflation)
   const [market, setMarket] = useState(null);
   const [asiRange, setAsiRange] = useState("1Y");
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/market")
+    fetch("/api/market", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
       .then((d) => { if (!cancelled && (d.asi || d.snapshot || d.fx || d.inflation)) setMarket(d); })
-      .catch(() => {});
+      .catch(() => {}); // keep showing the last good data
     return () => { cancelled = true; };
-  }, []);
+  }, [refreshTick]);
   const asi = market?.asi || null;
   const snap = market?.snapshot || null;
   const fx = market?.fx || null;
@@ -365,15 +384,15 @@ export default function App() {
     return pts.filter((_, i) => i % step === 0 || i === pts.length - 1).map(([t, v]) => ({ t, v }));
   }, [asi, asiRange]);
 
-  // Per-company NGX data (quote, key stats, ~1 month of daily closes), cached by symbol
-  const [coData, setCoData] = useState({});
 
   // Fetch the full NGX universe + live prices from our serverless proxy (free,
   // public AFX data). Curated names keep their analytics + get live price;
   // every other listed company becomes searchable with a real live quote.
+  const [feed, setFeed] = useState(null); // { tradeDate, count, source }
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/stocks")
+    setRefreshing(true);
+    fetch("/api/stocks", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
       .then((data) => {
         if (cancelled || !data?.stocks?.length) return;
@@ -391,11 +410,19 @@ export default function App() {
         setCompanies(merged);
         setLive(true);
         setSel((prev) => merged.find((c) => c.t === prev.t) || prev);
-        setDataNote(`Live NGX data · ${data.count} companies · updated ${new Date(data.updated).toLocaleTimeString()}`);
+        setFeed({ tradeDate: data.tradeDate, count: data.count, source: data.source });
+        setDataNote("");
+        lastRefreshRef.current = Date.now();
+        setLastRefresh(new Date());
       })
-      .catch(() => { if (!cancelled) setDataNote("Live data unavailable — showing curated sample."); });
+      .catch(() => {
+        if (cancelled) return;
+        // Keep the last good prices on a failed refresh; only fall back to the sample if we never loaded.
+        setDataNote((n) => (lastRefreshRef.current ? "Refresh failed — showing last loaded prices." : "Live data unavailable — showing curated sample."));
+      })
+      .finally(() => { if (!cancelled) setRefreshing(false); });
     return () => { cancelled = true; };
-  }, [SEEDED]);
+  }, [SEEDED, refreshTick]);
 
   // AI Research Assistant
   const [chat, setChat] = useState([]);
@@ -404,15 +431,15 @@ export default function App() {
   useEffect(() => { setChat([]); setInput(""); }, [sel.t]);
   useEffect(() => {
     const t = sel.t;
-    if (coData[t]) return;
+    if (coData[t] && !coData[t].error) return;
     let cancelled = false;
     setCoData((p) => ({ ...p, [t]: { loading: true } }));
-    fetch(`/api/company?symbol=${encodeURIComponent(t)}`)
+    fetch(`/api/company?symbol=${encodeURIComponent(t)}`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
       .then((d) => { if (!cancelled) setCoData((p) => ({ ...p, [t]: d })); })
       .catch(() => { if (!cancelled) setCoData((p) => ({ ...p, [t]: { error: true } })); });
     return () => { cancelled = true; setCoData((p) => (p[t]?.loading ? { ...p, [t]: undefined } : p)); };
-  }, [sel.t]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sel.t, refreshTick]); // eslint-disable-line react-hooks/exhaustive-deps
   const cd = coData[sel.t] || {};
 
   // Screener
@@ -704,8 +731,19 @@ export default function App() {
             }}>{label}</button>
           ))}
         </div>
-        <div style={{ marginTop: 8, fontSize: 10.5, color: "rgba(255,255,255,0.4)", fontFamily: "JetBrains Mono" }}>
-          {dataNote}
+        <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 10.5, color: "rgba(255,255,255,0.45)", fontFamily: "JetBrains Mono" }}>
+          {feed && (
+            <span>
+              NGX prices as of {fmtDate(feed.tradeDate || lastRefresh)} · {feed.count} companies
+              {lastRefresh && ` · refreshed ${lastRefresh.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`}
+              {" · auto-updates every 5 min"}
+            </span>
+          )}
+          {dataNote && <span style={{ color: feed ? AMBER : "rgba(255,255,255,0.45)" }}>{dataNote}</span>}
+          <button onClick={refreshNow} disabled={refreshing} title="Fetch the latest prices now" style={{
+            fontSize: 10.5, fontFamily: "JetBrains Mono", padding: "2px 8px", borderRadius: 6, cursor: refreshing ? "default" : "pointer",
+            background: "transparent", border: `1px solid ${BORDER}`, color: refreshing ? "rgba(255,255,255,0.35)" : ACCENT,
+          }}>{refreshing ? "Refreshing…" : "↻ Refresh"}</button>
         </div>
       </div>
 
@@ -717,7 +755,7 @@ export default function App() {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12 }}>
               {asi ? (
                 <Stat label="NGX All-Share" value={asi.value} change={asi.chg ?? undefined} fmt={(v) => v.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                  sub={`As of ${fmtDate(asi.asOf)}`} />
+                  sub={`${asi.live ? "Latest level" : "Close"} · ${fmtDate(asi.asOf)}`} />
               ) : (
                 <Stat label="NGX All-Share" value={MARKET.asi} change={MARKET.asiChange} fmt={(v) => v.toLocaleString()} sample />
               )}
