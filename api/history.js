@@ -13,13 +13,15 @@ const UA = {
   Referer: "https://afx.kwayisi.org/",
 };
 const KEEP_MS = 4 * 366 * 86400000; // enough for a 3-year view plus its baseline
+export const config = { maxDuration: 30 };
 
 export default async function handler(req, res) {
   const symbol = String(req.query?.symbol || "").toUpperCase().trim();
   if (!/^[A-Z0-9.]{2,20}$/.test(symbol)) return res.status(400).json({ error: "Invalid symbol" });
 
+  const started = Date.now();
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), 9000);
+  const timer = setTimeout(() => ctl.abort(), 25000);
   try {
     const r = await fetch(`https://afx.kwayisi.org/chart/ngx/${encodeURIComponent(symbol.toLowerCase())}`, {
       headers: UA, signal: ctl.signal, redirect: "follow",
@@ -44,7 +46,7 @@ export default async function handler(req, res) {
     res.status(200).json({ symbol, count: history.length, from: history[0][0], to: last, history, source: "afx.kwayisi.org (NGX daily closes)" });
   } catch (err) {
     res.setHeader("Cache-Control", "public, s-maxage=120");
-    res.status(502).json({ error: "Price history unavailable", detail: String(err?.message || err) });
+    res.status(502).json({ error: "Price history unavailable", detail: String(err?.message || err), ms: Date.now() - started });
   } finally {
     clearTimeout(timer);
   }
