@@ -317,19 +317,26 @@ const fmtDate = (d) => {
 };
 const fmtTick = (t, range) => {
   const x = new Date(t);
-  return ["1M", "3M"].includes(range)
+  return ["CUR", "30D", "1M", "3M", "6M", "YTD"].includes(range)
     ? x.toLocaleDateString(undefined, { day: "numeric", month: "short", timeZone: "UTC" })
     : x.toLocaleDateString(undefined, { month: "short", year: "2-digit", timeZone: "UTC" });
 };
-const ASI_RANGES = [["1M", "last month"], ["3M", "last 3 months"], ["6M", "last 6 months"], ["YTD", "year to date"], ["1Y", "last year"], ["5Y", "last 5 years"]];
+// [key, button label, subtitle]. "Current" = the last 5 trading sessions (NGX has no free intraday data).
+const ASI_RANGES = [
+  ["CUR", "Current", "last 5 trading days"],
+  ["30D", "30D", "last 30 days"],
+  ["6M", "6M", "last 6 months"],
+  ["YTD", "YTD", "year to date"],
+  ["1Y", "1Y", "last 12 months"],
+  ["3Y", "3Y", "last 3 years"],
+];
 const rangeStart = (end, k) => {
   const d = new Date(end);
-  if (k === "1M") d.setMonth(d.getMonth() - 1);
-  else if (k === "3M") d.setMonth(d.getMonth() - 3);
-  else if (k === "6M") d.setMonth(d.getMonth() - 6);
-  else if (k === "YTD") return new Date(d.getFullYear(), 0, 1).getTime();
-  else if (k === "1Y") d.setFullYear(d.getFullYear() - 1);
-  else d.setFullYear(d.getFullYear() - 5);
+  if (k === "30D") return end - 30 * 86400000;
+  if (k === "6M") d.setUTCMonth(d.getUTCMonth() - 6);
+  else if (k === "YTD") return Date.UTC(d.getUTCFullYear(), 0, 1);
+  else if (k === "1Y") d.setUTCFullYear(d.getUTCFullYear() - 1);
+  else if (k === "3Y") d.setUTCFullYear(d.getUTCFullYear() - 3);
   return d.getTime();
 };
 
@@ -383,8 +390,8 @@ export default function App() {
   const asiChart = useMemo(() => {
     if (!asi?.series?.length) return [];
     const end = asi.series[asi.series.length - 1][0];
-    const start = rangeStart(end, asiRange);
-    const pts = asi.series.filter(([t]) => t >= start);
+    // "Current" = last 5 sessions plus the prior close, so the change shown is over 5 trading days.
+    const pts = asiRange === "CUR" ? asi.series.slice(-6) : asi.series.filter(([t]) => t >= rangeStart(end, asiRange));
     const step = Math.max(1, Math.floor(pts.length / 400)); // keep the chart light
     return pts.filter((_, i) => i % step === 0 || i === pts.length - 1).map(([t, v]) => ({ t, v }));
   }, [asi, asiRange]);
@@ -794,7 +801,7 @@ export default function App() {
                   <div>
                     <div style={{ fontFamily: "Sora", fontWeight: 700, fontSize: 14, marginBottom: 4 }}>NGX All-Share Index{!asi && <SampleTag />}</div>
                     <div style={{ fontSize: 11.5, color: "rgba(255,255,255,0.4)" }}>
-                      {asi ? `Daily close · index points · ${ASI_RANGES.find((r) => r[0] === asiRange)[1]}` : "Trailing 9 months · index points"}
+                      {asi ? `Daily close · index points · ${ASI_RANGES.find((r) => r[0] === asiRange)[2]}` : "Trailing 9 months · index points"}
                       {asi && asiChart.length > 1 && (() => {
                         const ch = pctChange(asiChart[asiChart.length - 1].v, asiChart[0].v);
                         return <span style={{ marginLeft: 8, fontFamily: "JetBrains Mono", color: ch >= 0 ? ACCENT : RED }}>{signedPct(ch)}</span>;
@@ -802,13 +809,13 @@ export default function App() {
                     </div>
                   </div>
                   {asi && (
-                    <div role="group" aria-label="Time range" style={{ display: "flex", gap: 4 }}>
-                      {ASI_RANGES.map(([k]) => (
-                        <button key={k} onClick={() => setAsiRange(k)} style={{
+                    <div role="group" aria-label="Time range" style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                      {ASI_RANGES.map(([k, label]) => (
+                        <button key={k} onClick={() => setAsiRange(k)} aria-pressed={asiRange === k} style={{
                           fontSize: 11, padding: "4px 9px", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontFamily: "JetBrains Mono",
                           border: `1px solid ${asiRange === k ? ACCENT : BORDER}`, background: asiRange === k ? "rgba(0,229,160,0.12)" : "transparent",
                           color: asiRange === k ? ACCENT : "rgba(255,255,255,0.55)",
-                        }}>{k}</button>
+                        }}>{label}</button>
                       ))}
                     </div>
                   )}
@@ -825,10 +832,15 @@ export default function App() {
                       <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
                       <XAxis dataKey="t" type="number" scale="time" domain={["dataMin", "dataMax"]} stroke="rgba(255,255,255,0.3)" fontSize={11}
                         tickFormatter={(t) => fmtTick(t, asiRange)} minTickGap={28} />
-                      <YAxis stroke="rgba(255,255,255,0.3)" fontSize={11} domain={["auto", "auto"]} width={62}
-                        tickFormatter={(v) => (v >= 1000 ? `${Math.round(v / 1000)}k` : v)} />
+                      <YAxis stroke="rgba(255,255,255,0.3)" fontSize={11} domain={["auto", "auto"]} width={66}
+                        tickFormatter={(v) => {
+                          // Short ranges move only a few hundred points — "253k" on every tick would be useless.
+                          const vals = asiChart.map((p) => p.v);
+                          const spread = vals.length ? Math.max(...vals) - Math.min(...vals) : 0;
+                          return spread < 20000 ? Math.round(v).toLocaleString() : `${Math.round(v / 1000)}k`;
+                        }} />
                       <Tooltip contentStyle={tipStyle} labelFormatter={(t) => fmtDate(t)} formatter={(v) => [Number(v).toLocaleString(), "ASI"]} />
-                      <Area type="linear" dataKey="v" stroke={ACCENT} strokeWidth={2} fill="url(#g)" dot={false} activeDot={{ r: 4 }} isAnimationActive={false} />
+                      <Area type="linear" dataKey="v" stroke={ACCENT} strokeWidth={2} fill="url(#g)" dot={asiRange === "CUR" ? { r: 3, fill: ACCENT, strokeWidth: 0 } : false} activeDot={{ r: 4 }} isAnimationActive={false} />
                     </AreaChart>
                   ) : (
                     <AreaChart data={asiSeries}>
