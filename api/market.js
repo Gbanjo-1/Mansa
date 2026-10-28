@@ -36,7 +36,10 @@ const valueAt = (series, t) => {
   return v;
 };
 
-async function asi() {
+// Calendar date in Lagos (NGX trades on West Africa Time, UTC+1)
+const lagosDay = (t = Date.now()) => new Date(t + 3600000).toISOString().slice(0, 10);
+
+async function asi(liveASI) {
   const d = await getJSON("https://ngxgroup.com/wp-json/ngx-data-widgets/v1/home/indices-page?index=ASI&compare=NONE");
   const q = d?.primary?.quote;
   const raw = Array.isArray(q?.IndiciesData) ? q.IndiciesData : [];
@@ -45,6 +48,16 @@ async function asi() {
     .filter(([t, v]) => isFinite(t) && isFinite(v) && v > 0)
     .sort((a, b) => a[0] - b[0]);
   if (!series.length) throw new Error("ASI: empty series");
+
+  // NGX's history feed only publishes a day's close the next day, but the market
+  // snapshot carries the current level. If it differs from the last published
+  // close and today's point is missing, add it so the index is current.
+  let live = false;
+  const [prevT, prevV] = series[series.length - 1];
+  if (liveASI && Math.abs(liveASI - prevV) > 0.005 && lagosDay(prevT) < lagosDay()) {
+    series.push([Date.parse(lagosDay() + "T00:00:00Z"), liveASI]);
+    live = true;
+  }
 
   const [lastT, last] = series[series.length - 1];
   const yStart = Date.UTC(new Date(lastT).getUTCFullYear(), 0, 1);
@@ -55,9 +68,10 @@ async function asi() {
   const sd = Math.sqrt(rets.reduce((a, b) => a + (b - mean) ** 2, 0) / Math.max(1, rets.length - 1));
 
   return {
-    value: q.currentPrice ?? last,
-    chg: q.changePercentage != null ? +Number(q.changePercentage).toFixed(2) : null,
-    asOf: q.currentDateTime || new Date(lastT).toISOString(),
+    value: live ? last : q.currentPrice ?? last,
+    chg: live ? pct(last, prevV) : q.changePercentage != null ? +Number(q.changePercentage).toFixed(2) : null,
+    asOf: live ? new Date(lastT).toISOString() : q.currentDateTime || new Date(lastT).toISOString(),
+    live,
     ytd: pct(last, valueAt(series, yStart - 1) ?? series[0][1]),
     r1m: pct(last, valueAt(series, lastT - 30 * DAY)),
     r1y: pct(last, valueAt(series, lastT - 365 * DAY)),
@@ -69,7 +83,7 @@ async function asi() {
 
 async function snapshot() {
   const s = await getJSON("https://doclib.ngxgroup.com/REST/api/mrkstat/mrksnapshot");
-  return { cap: s.CAP ?? null, deals: s.DEALS ?? null, volume: s.VOLUME ?? null, value: s.VALUE ?? null };
+  return { asi: s.ASI ?? null, cap: s.CAP ?? null, deals: s.DEALS ?? null, volume: s.VOLUME ?? null, value: s.VALUE ?? null };
 }
 
 async function fx() {
@@ -88,13 +102,17 @@ async function inflation() {
 
 export default async function handler(req, res) {
   const names = ["asi", "snapshot", "fx", "inflation"];
-  const results = await Promise.allSettled([asi(), snapshot(), fx(), inflation()]);
+  // Snapshot first (fast) so the index history can be topped up with today's level.
+  const snapP = snapshot();
+  const results = await Promise.allSettled([
+    snapP.catch(() => null).then((s) => asi(s?.asi)), snapP, fx(), inflation(),
+  ]);
   const out = { updated: new Date().toISOString(), errors: {} };
   results.forEach((r, i) => {
     out[names[i]] = r.status === "fulfilled" ? r.value : null;
     if (r.status === "rejected") out.errors[names[i]] = String(r.reason?.message || r.reason);
   });
   const ok = results.some((r) => r.status === "fulfilled");
-  res.setHeader("Cache-Control", "public, s-maxage=900, stale-while-revalidate=3600");
+  res.setHeader("Cache-Control", "public, s-maxage=300, stale-while-revalidate=600");
   res.status(ok ? 200 : 502).json(out);
 }
