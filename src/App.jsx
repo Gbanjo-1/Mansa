@@ -339,6 +339,42 @@ const rangeStart = (end, k) => {
   else if (k === "3Y") d.setUTCFullYear(d.getUTCFullYear() - 3);
   return d.getTime();
 };
+// Points for a range: "Current" = last 5 sessions plus the prior close; date ranges start
+// from the last close on/before the start date (e.g. YTD from last year's final close).
+const sliceRange = (series, k) => {
+  if (!series?.length) return [];
+  let pts;
+  if (k === "CUR") pts = series.slice(-6);
+  else {
+    const start = rangeStart(series[series.length - 1][0], k);
+    const first = series.findIndex(([t]) => t >= start);
+    pts = first < 0 ? [] : series.slice(Math.max(0, series[first][0] > start ? first - 1 : first));
+  }
+  const step = Math.max(1, Math.floor(pts.length / 400)); // keep the chart light
+  return pts.filter((_, i) => i % step === 0 || i === pts.length - 1).map(([t, v]) => ({ t, v }));
+};
+// Long ranges: put ticks on month starts (every 2 months for 1Y, 6 for 3Y) so labels never repeat.
+const monthTicks = (pts, k) => {
+  if (!["1Y", "3Y"].includes(k) || pts.length < 2) return undefined;
+  const every = k === "1Y" ? 2 : 6, a = pts[0].t, z = pts[pts.length - 1].t, out = [];
+  const d = new Date(a);
+  let y = d.getUTCFullYear(), m = d.getUTCMonth() + 1;
+  for (;;) {
+    if (m > 11) { y += 1; m -= 12; }
+    const t = Date.UTC(y, m, 1);
+    if (t > z) break;
+    if (m % every === 0) out.push(t);
+    m += 1;
+  }
+  return out.length >= 2 ? out : undefined;
+};
+// A range is offered only when the data reaches back far enough to fill it (7 days' slack
+// for weekends/holidays at the start).
+const rangeCovered = (series, k) => {
+  if (!series?.length) return false;
+  if (k === "CUR") return series.length >= 3;
+  return series[0][0] <= rangeStart(series[series.length - 1][0], k) + 7 * 86400000;
+};
 
 export default function App() {
   const [tab, setTab] = useState("dashboard");
@@ -389,19 +425,10 @@ export default function App() {
   const infl = market?.inflation || null;
   const asiChart = useMemo(() => {
     if (!asi?.series?.length) return [];
-    const end = asi.series[asi.series.length - 1][0];
     // "Current" = last 5 sessions plus the prior close, so the change shown is over 5 trading days.
     // Date ranges start from the last close on/before the start date (e.g. YTD from last year's
     // final close) — the same baseline the YTD / 1-year tiles use, so the numbers agree.
-    let pts;
-    if (asiRange === "CUR") pts = asi.series.slice(-6);
-    else {
-      const start = rangeStart(end, asiRange);
-      const first = asi.series.findIndex(([t]) => t >= start);
-      pts = first < 0 ? [] : asi.series.slice(Math.max(0, asi.series[first][0] > start ? first - 1 : first));
-    }
-    const step = Math.max(1, Math.floor(pts.length / 400)); // keep the chart light
-    return pts.filter((_, i) => i % step === 0 || i === pts.length - 1).map(([t, v]) => ({ t, v }));
+    return sliceRange(asi.series, asiRange);
   }, [asi, asiRange]);
 
 
@@ -461,6 +488,36 @@ export default function App() {
     return () => { cancelled = true; setCoData((p) => (p[t]?.loading ? { ...p, [t]: undefined } : p)); };
   }, [sel.t, refreshTick]); // eslint-disable-line react-hooks/exhaustive-deps
   const cd = coData[sel.t] || {};
+
+  // Multi-year daily closes for the company chart (cached per symbol for the session).
+  const [hist, setHist] = useState({});
+  const [coRange, setCoRange] = useState("1Y");
+  useEffect(() => {
+    const t = sel.t;
+    if (hist[t]) return;
+    let cancelled = false;
+    setHist((p) => ({ ...p, [t]: { loading: true } }));
+    fetch(`/api/history?symbol=${encodeURIComponent(t)}`)
+      .then((r) => r.json().then((d) => (r.ok ? d : Promise.reject(d))))
+      .then((d) => { if (!cancelled) setHist((p) => ({ ...p, [t]: d })); })
+      .catch((d) => { if (!cancelled) setHist((p) => ({ ...p, [t]: { error: true, keyConfigured: !!d?.keyConfigured } })); });
+    return () => { cancelled = true; setHist((p) => (p[t]?.loading ? { ...p, [t]: undefined } : p)); };
+  }, [sel.t]); // eslint-disable-line react-hooks/exhaustive-deps
+  const hd = hist[sel.t] || {};
+  // Long history up to where NGX's own month of closes begins, then NGX's closes (which end at
+  // today's official price), so the latest part of the chart always matches the live quote.
+  const coSeries = useMemo(() => {
+    const recent = cd.history || [];
+    const long = hd.history || [];
+    if (!recent.length) return long;
+    return [...long.filter(([t]) => t < recent[0][0]), ...recent];
+  }, [cd.history, hd.history]);
+  const coRanges = ASI_RANGES.map(([k, label, sub]) => ({ k, label, sub, ok: rangeCovered(coSeries, k) }));
+  // If the chosen range isn't available for this stock, show the longest one that is.
+  const coRangeEff = coRanges.find((r) => r.k === coRange && r.ok)?.k
+    || [...coRanges].reverse().find((r) => r.ok && ASI_RANGES.findIndex((a) => a[0] === r.k) < ASI_RANGES.findIndex((a) => a[0] === coRange))?.k
+    || coRanges.find((r) => r.ok)?.k || "CUR";
+  const coChart = useMemo(() => sliceRange(coSeries, coRangeEff), [coSeries, coRangeEff]);
 
   // Screener
   const [screen, setScreen] = useState("all");
@@ -579,6 +636,39 @@ export default function App() {
       return { ...p, [activeList]: cur.includes(ticker) ? cur.filter((t) => t !== ticker) : [...cur, ticker] };
     });
 
+  // Is the server-side AI configured? (null = unknown yet)
+  const [aiReady, setAiReady] = useState(null);
+  useEffect(() => {
+    fetch("/api/ask", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((d) => setAiReady(!!d.configured))
+      .catch(() => setAiReady(null));
+  }, []);
+
+  // Without an AI key the assistant still answers — with a plain read-out of the live data.
+  function quickRead() {
+    const px = cd.price ?? (sel.lv ? sel.price : null);
+    const lines = [];
+    if (px != null) {
+      const day = cd.changePct ?? (sel.lv ? sel.chg : null);
+      lines.push(`${sel.n} (${sel.t}) last traded at ₦${px.toLocaleString()}${day != null ? ` (${signedPct(day)} on the day)` : ""}${cd.tradeDate ? `, ${fmtDate(cd.tradeDate + "T00:00:00Z")}` : ""}.`);
+    }
+    const perf = ["30D", "6M", "YTD", "1Y", "3Y"].filter((k) => rangeCovered(coSeries, k)).map((k) => {
+      const pts = sliceRange(coSeries, k);
+      return pts.length > 1 ? `${k} ${signedPct(pctChange(pts[pts.length - 1].v, pts[0].v))}` : null;
+    }).filter(Boolean);
+    if (perf.length) lines.push(`Price change: ${perf.join(" · ")}.`);
+    if (cd.low52 != null && cd.high52 != null && px != null && cd.high52 > cd.low52) {
+      const pos = Math.round(((px - cd.low52) / (cd.high52 - cd.low52)) * 100);
+      lines.push(`52-week range ₦${cd.low52}–${cd.high52}; the price sits ${pos}% of the way up that range.`);
+    }
+    if (cd.marketCap) lines.push(`Market cap about ${nairaBig(cd.marketCap)}.`);
+    if (sel.hasAnalytics && sel.pe != null) lines.push(`Illustrative estimates (not reported figures): P/E ${sel.pe}, dividend yield ${sel.div ?? "N/A"}%.`);
+    if (asi?.ytd != null) lines.push(`For context, the NGX All-Share Index is ${signedPct(asi.ytd)} year to date.`);
+    lines.push("This is a data summary, not an AI opinion — the AI assistant isn't switched on for this site yet. Not investment advice.");
+    return lines.join("\n");
+  }
+
   async function askAI(question) {
     const q = question.trim();
     if (!q || thinking) return;
@@ -597,6 +687,10 @@ export default function App() {
               ...sel,
               ngxLive: ngx.symbol ? ngx : undefined,
               priceLastMonth: history?.length ? { from: history[0][1], to: history[history.length - 1][1] } : undefined,
+              pricePerformancePct: Object.fromEntries(["30D", "6M", "YTD", "1Y", "3Y"].filter((k) => rangeCovered(coSeries, k)).map((k) => {
+                const pts = sliceRange(coSeries, k);
+                return [k, pts.length > 1 ? pctChange(pts[pts.length - 1].v, pts[0].v) : null];
+              })),
               market: asi ? { asi: asi.value, asiYtdPct: asi.ytd, asi1yPct: asi.r1y, usdngn: fx?.usdngn, inflationPct: infl?.value } : undefined,
             };
           })(),
@@ -604,7 +698,14 @@ export default function App() {
         }),
       });
       const data = await res.json().catch(() => ({}));
+      if (res.status === 503) {
+        setAiReady(false);
+        setChat([...next, { role: "assistant", content: quickRead(), offline: true }]);
+        setThinking(false);
+        return;
+      }
       if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      setAiReady(true);
       setChat([...next, { role: "assistant", content: data.text || "No response." }]);
     } catch (e) {
       setChat([...next, { role: "assistant", content: `⚠ ${e.message || "Error reaching the AI service. Try again."}`, error: true }]);
@@ -839,7 +940,7 @@ export default function App() {
                       </defs>
                       <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
                       <XAxis dataKey="t" type="number" scale="time" domain={["dataMin", "dataMax"]} stroke="rgba(255,255,255,0.3)" fontSize={11}
-                        tickFormatter={(t) => fmtTick(t, asiRange)} minTickGap={28} />
+                        ticks={monthTicks(asiChart, asiRange)} tickFormatter={(t) => fmtTick(t, asiRange)} minTickGap={28} />
                       <YAxis stroke="rgba(255,255,255,0.3)" fontSize={11} domain={["auto", "auto"]} width={66}
                         tickFormatter={(v) => {
                           // Short ranges move only a few hundred points — "253k" on every tick would be useless.
@@ -1042,19 +1143,35 @@ export default function App() {
             <div className="glass" style={{ borderRadius: 16, padding: 18, marginTop: 14 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
                 <div>
-                  <div style={{ fontFamily: "Sora", fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Price — last month</div>
+                  <div style={{ fontFamily: "Sora", fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Share Price · {sel.t}</div>
                   <div style={{ fontSize: 11.5, color: "rgba(255,255,255,0.4)" }}>
-                    {cd.loading ? "Loading NGX data…" : cd.error ? "NGX data unavailable right now." : `Daily close (₦) · NGX${cd.tradeDate ? ` · as of ${fmtDate(cd.tradeDate + "T00:00:00Z")}` : ""}`}
-                    {cd.history?.length > 1 && (() => {
-                      const ch = pctChange(cd.history[cd.history.length - 1][1], cd.history[0][1]);
-                      return <span style={{ marginLeft: 8, fontFamily: "JetBrains Mono", color: ch >= 0 ? ACCENT : RED }}>{signedPct(ch)} over period</span>;
+                    {cd.loading && !coSeries.length ? "Loading NGX data…" : cd.error && !coSeries.length ? "NGX data unavailable right now." :
+                      `Daily close (₦) · ${ASI_RANGES.find((r) => r[0] === coRangeEff)[2]}${cd.tradeDate ? ` · as of ${fmtDate(cd.tradeDate + "T00:00:00Z")}` : ""}`}
+                    {coChart.length > 1 && (() => {
+                      const ch = pctChange(coChart[coChart.length - 1].v, coChart[0].v);
+                      return <span style={{ marginLeft: 8, fontFamily: "JetBrains Mono", color: ch > 0 ? ACCENT : ch < 0 ? RED : "rgba(255,255,255,0.55)" }}>{signedPct(ch)}</span>;
                     })()}
                   </div>
                 </div>
+                {coSeries.length > 1 && (
+                  <div role="group" aria-label="Time range" style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                    {coRanges.map(({ k, label, ok }) => {
+                      const on = coRangeEff === k;
+                      return (
+                        <button key={k} onClick={() => ok && setCoRange(k)} disabled={!ok} aria-pressed={on}
+                          title={ok ? undefined : hd.loading ? "Loading longer history…" : "Longer history isn't available for this stock right now"} style={{
+                          fontSize: 11, padding: "4px 9px", borderRadius: 6, cursor: ok ? "pointer" : "not-allowed", fontWeight: 700, fontFamily: "JetBrains Mono",
+                          border: `1px solid ${on ? BLUE : BORDER}`, background: on ? "rgba(77,166,255,0.14)" : "transparent",
+                          color: on ? BLUE : ok ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.2)",
+                        }}>{label}</button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-              {cd.history?.length > 1 ? (
-                <ResponsiveContainer width="100%" height={200}>
-                  <AreaChart data={cd.history.map(([t, v]) => ({ t, v }))} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+              {coChart.length > 1 ? (
+                <ResponsiveContainer width="100%" height={220}>
+                  <AreaChart data={coChart} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
                     <defs>
                       <linearGradient id="gc" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stopColor={BLUE} stopOpacity={0.3} />
@@ -1063,17 +1180,24 @@ export default function App() {
                     </defs>
                     <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
                     <XAxis dataKey="t" type="number" scale="time" domain={["dataMin", "dataMax"]} stroke="rgba(255,255,255,0.3)" fontSize={11}
-                      tickFormatter={(t) => fmtTick(t, "1M")} minTickGap={28} />
-                    <YAxis stroke="rgba(255,255,255,0.3)" fontSize={11} domain={["auto", "auto"]} width={56} />
+                      ticks={monthTicks(coChart, coRangeEff)} tickFormatter={(t) => fmtTick(t, coRangeEff)} minTickGap={28} />
+                    <YAxis stroke="rgba(255,255,255,0.3)" fontSize={11} domain={["auto", "auto"]} width={56}
+                      tickFormatter={(v) => (v >= 100 ? Math.round(v).toLocaleString() : Number(v).toFixed(2))} />
                     <Tooltip contentStyle={tipStyle} labelFormatter={(t) => fmtDate(t)} formatter={(v) => [`₦${Number(v).toLocaleString()}`, "Close"]} />
-                    <Area type="linear" dataKey="v" stroke={BLUE} strokeWidth={2} fill="url(#gc)" dot={false} activeDot={{ r: 4 }} isAnimationActive={false} />
+                    <Area type="linear" dataKey="v" stroke={BLUE} strokeWidth={2} fill="url(#gc)" dot={coRangeEff === "CUR" ? { r: 3, fill: BLUE, strokeWidth: 0 } : false} activeDot={{ r: 4 }} isAnimationActive={false} />
                   </AreaChart>
                 </ResponsiveContainer>
               ) : (
                 <div style={{ height: 80, display: "flex", alignItems: "center", fontSize: 12, color: "rgba(255,255,255,0.35)" }}>
-                  {cd.loading ? "Loading…" : "No recent price history available."}
+                  {cd.loading || hd.loading ? "Loading…" : "No recent price history available."}
                 </div>
               )}
+              {hd.error && coSeries.length > 1 && (
+                <div style={{ marginTop: 8, fontSize: 11, color: "rgba(255,255,255,0.35)" }}>
+                  Showing NGX’s last month of closes — longer ranges (6M–3Y) need the history feed, which isn’t reachable right now.
+                </div>
+              )}
+              {hd.source && <div style={{ marginTop: 6, fontSize: 10.5, color: "rgba(255,255,255,0.3)" }}>History: {hd.source} · latest month: NGX</div>}
             </div>
 
             <ProfileSection title="Market Data · NGX" note={cd.error ? "Couldn't reach NGX — showing what the live price feed has." : undefined}>
@@ -1143,6 +1267,11 @@ export default function App() {
               <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", marginBottom: 12 }}>
                 Ask anything about {sel.n}. Answers are AI-generated from the data above{sel.hasAnalytics ? "" : " (live price only — fundamentals unavailable)"}.
               </div>
+              {aiReady === false && (
+                <div style={{ fontSize: 11.5, lineHeight: 1.5, color: AMBER, background: "rgba(255,180,84,0.08)", border: "1px solid rgba(255,180,84,0.25)", borderRadius: 8, padding: "8px 12px", marginBottom: 12 }}>
+                  AI answers aren’t switched on for this site yet, so questions get a quick summary of the live data instead.
+                </div>
+              )}
 
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
                 {["Is this company undervalued?", "What are the biggest risks?", "Good for long-term wealth building?", "How is management quality?"].map((q) => (
@@ -1179,10 +1308,10 @@ export default function App() {
                     padding: "11px 14px", color: "#fff", fontSize: 13, outline: "none", fontFamily: "inherit",
                   }}
                 />
-                <button onClick={() => askAI(input)} disabled={thinking} style={{
-                  padding: "0 18px", borderRadius: 10, border: "none", cursor: thinking ? "default" : "pointer",
-                  background: ACCENT, color: "#000", fontWeight: 700, fontSize: 13,
-                }}>Ask</button>
+                <button onClick={() => askAI(input)} disabled={thinking || !input.trim()} style={{
+                  padding: "0 18px", borderRadius: 10, border: "none", cursor: thinking || !input.trim() ? "default" : "pointer",
+                  background: ACCENT, color: "#000", fontWeight: 700, fontSize: 13, opacity: thinking || !input.trim() ? 0.5 : 1,
+                }}>{thinking ? "…" : "Ask"}</button>
               </div>
             </div>
             )}
