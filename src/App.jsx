@@ -308,13 +308,15 @@ const nairaBig = (v) => {
 const countBig = (v) => (v == null ? NA : v >= 1e9 ? `${(v / 1e9).toFixed(2)}bn` : v >= 1e6 ? `${(v / 1e6).toFixed(1)}m` : Math.round(v).toLocaleString());
 const fmtDate = (d) => {
   const x = new Date(d);
-  return isNaN(x) ? "—" : x.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+  // NGX dates are calendar days stamped at midnight UTC — format in UTC so they
+  // don't slip back a day for viewers west of Greenwich.
+  return isNaN(x) ? "—" : x.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
 };
 const fmtTick = (t, range) => {
   const x = new Date(t);
   return ["1M", "3M"].includes(range)
-    ? x.toLocaleDateString(undefined, { day: "numeric", month: "short" })
-    : x.toLocaleDateString(undefined, { month: "short", year: "2-digit" });
+    ? x.toLocaleDateString(undefined, { day: "numeric", month: "short", timeZone: "UTC" })
+    : x.toLocaleDateString(undefined, { month: "short", year: "2-digit", timeZone: "UTC" });
 };
 const ASI_RANGES = [["1M", "last month"], ["3M", "last 3 months"], ["6M", "last 6 months"], ["YTD", "year to date"], ["1Y", "last year"], ["5Y", "last 5 years"]];
 const rangeStart = (end, k) => {
@@ -734,7 +736,7 @@ export default function App() {
         <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 10.5, color: "rgba(255,255,255,0.45)", fontFamily: "JetBrains Mono" }}>
           {feed && (
             <span>
-              NGX prices as of {fmtDate(feed.tradeDate || lastRefresh)} · {feed.count} companies
+              NGX prices as of {fmtDate(feed.tradeDate ? feed.tradeDate.slice(0, 10) + "T00:00:00Z" : lastRefresh)} · {feed.count} companies
               {lastRefresh && ` · refreshed ${lastRefresh.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`}
               {" · auto-updates every 5 min"}
             </span>
