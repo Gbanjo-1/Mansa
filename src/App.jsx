@@ -295,6 +295,9 @@ function Stat({ label, value, change, fmt, sample, sub }) {
 const tipStyle = { background: "#0a0a0a", border: `1px solid ${BORDER}`, borderRadius: 8, fontSize: 12 };
 
 // Formatting helpers for live data
+// Day-change display: flat (0 / missing) is neutral grey, not green.
+const chgColor = (v) => (v > 0 ? ACCENT : v < 0 ? RED : "rgba(255,255,255,0.45)");
+const chgText = (v) => (v == null || !isFinite(v) ? "—" : v === 0 ? "0.00%" : `${v > 0 ? "+" : ""}${Number(v).toFixed(2)}%`);
 const signedPct = (v) => (v == null || !isFinite(v) ? NA : `${v >= 0 ? "+" : ""}${Number(v).toFixed(2)}%`);
 const pctChange = (a, b) => (a && b ? ((a - b) / b) * 100 : null);
 const nairaBig = (v) => {
@@ -708,14 +711,14 @@ export default function App() {
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                     {c.sector && c.sector !== "—" && <span style={{ fontSize: 11, color: "rgba(255,255,255,0.35)" }}>{c.sector}</span>}
-                    <span style={{ fontSize: 11.5, fontFamily: "JetBrains Mono", color: "rgba(255,255,255,0.7)" }}>₦{c.price.toLocaleString()}</span>
+                    <span style={{ fontSize: 11.5, fontFamily: "JetBrains Mono", color: "rgba(255,255,255,0.7)" }}>{c.lv ? `₦${c.price.toLocaleString()}` : "—"}</span>
                     {c.rating ? (
                       <span style={{
                         fontSize: 10.5, fontWeight: 700, padding: "2px 8px", borderRadius: 5,
                         background: `${RATING_COLOR[c.rating]}22`, color: RATING_COLOR[c.rating],
                       }}>{c.rating}</span>
                     ) : (
-                      <span style={{ fontSize: 11, fontWeight: 700, fontFamily: "JetBrains Mono", color: c.chg >= 0 ? ACCENT : RED }}>{c.chg >= 0 ? "+" : ""}{c.chg}%</span>
+                      <span style={{ fontSize: 11, fontWeight: 700, fontFamily: "JetBrains Mono", color: chgColor(c.lv ? c.chg : null) }}>{chgText(c.lv ? c.chg : null)}</span>
                     )}
                   </div>
                 </div>
@@ -904,7 +907,7 @@ export default function App() {
               {[["Top Gainers", true], ["Top Losers", false]].map(([title, gain]) => (
                 <div key={title} className="glass" style={{ borderRadius: 16, padding: 18 }}>
                   <div style={{ fontFamily: "Sora", fontWeight: 700, fontSize: 14, marginBottom: 10 }}>{title}</div>
-                  {[...companies].sort((a, b) => gain ? b.chg - a.chg : a.chg - b.chg).slice(0, 4).map((c) => (
+                  {[...liveOnly].filter((c) => (gain ? c.chg > 0 : c.chg < 0)).sort((a, b) => gain ? b.chg - a.chg : a.chg - b.chg).slice(0, 4).map((c) => (
                     <div key={c.t} className="row" onClick={() => { setSel(c); setTab("company"); }} style={{
                       display: "flex", justifyContent: "space-between", padding: "9px 8px", borderRadius: 8, cursor: "pointer",
                     }}>
@@ -913,8 +916,8 @@ export default function App() {
                         <span style={{ fontFamily: "JetBrains Mono", fontWeight: 700, fontSize: 13 }}>{c.t}</span>
                         <span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>{c.n}</span>
                       </div>
-                      <span style={{ fontWeight: 700, fontSize: 13, color: c.chg >= 0 ? ACCENT : RED, fontFamily: "JetBrains Mono" }}>
-                        {c.chg >= 0 ? "+" : ""}{c.chg}%
+                      <span style={{ fontWeight: 700, fontSize: 13, color: chgColor(c.lv ? c.chg : null), fontFamily: "JetBrains Mono" }}>
+                        {chgText(c.lv ? c.chg : null)}
                       </span>
                     </div>
                   ))}
@@ -955,7 +958,7 @@ export default function App() {
               )}
               {(search.trim()
                 ? matches
-                : [...matches].sort((a, b) => b.chg - a.chg).slice(0, 20)
+                : [...matches].sort((a, b) => (b.lv ? b.chg : -Infinity) - (a.lv ? a.chg : -Infinity)).slice(0, 20)
               ).map((c) => (
                 <button key={c.t} onClick={() => setSel(c)} style={{
                   display: "inline-flex", alignItems: "center", gap: 7,
@@ -995,12 +998,12 @@ export default function App() {
                 )}
                 <div style={{ textAlign: "right" }}>
                   {(() => {
-                    const px = cd.price ?? sel.price;
-                    const ch = cd.changePct ?? sel.chg;
+                    const px = cd.price ?? (sel.lv ? sel.price : null);
+                    const ch = cd.price != null ? cd.changePct : sel.lv ? sel.chg : null;
                     return (
                       <>
-                        <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "JetBrains Mono" }}>₦{px.toLocaleString()}</div>
-                        <div style={{ color: ch >= 0 ? ACCENT : RED, fontWeight: 700, fontSize: 13 }}>{ch >= 0 ? "▲" : "▼"} {Math.abs(ch)}% (1D)</div>
+                        <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "JetBrains Mono" }}>{px != null ? `₦${px.toLocaleString()}` : "—"}</div>
+                        <div style={{ color: chgColor(ch), fontWeight: 700, fontSize: 13 }}>{ch > 0 ? "▲ " : ch < 0 ? "▼ " : ""}{chgText(ch)} (1D)</div>
                       </>
                     );
                   })()}
@@ -1021,7 +1024,7 @@ export default function App() {
                 <div>
                   <div style={{ fontFamily: "Sora", fontWeight: 700, fontSize: 14, marginBottom: 4 }}>Price — last month</div>
                   <div style={{ fontSize: 11.5, color: "rgba(255,255,255,0.4)" }}>
-                    {cd.loading ? "Loading NGX data…" : cd.error ? "NGX data unavailable right now." : `Daily close (₦) · NGX${cd.asOf ? ` · ${cd.asOf}` : ""}`}
+                    {cd.loading ? "Loading NGX data…" : cd.error ? "NGX data unavailable right now." : `Daily close (₦) · NGX${cd.tradeDate ? ` · as of ${fmtDate(cd.tradeDate + "T00:00:00Z")}` : ""}`}
                     {cd.history?.length > 1 && (() => {
                       const ch = pctChange(cd.history[cd.history.length - 1][1], cd.history[0][1]);
                       return <span style={{ marginLeft: 8, fontFamily: "JetBrains Mono", color: ch >= 0 ? ACCENT : RED }}>{signedPct(ch)} over period</span>;
@@ -1054,7 +1057,7 @@ export default function App() {
             </div>
 
             <ProfileSection title="Market Data · NGX" note={cd.error ? "Couldn't reach NGX — showing what the live price feed has." : undefined}>
-              <Metric label="Last Price" value={`₦${(cd.price ?? sel.price).toLocaleString()}`} />
+              <Metric label="Last Price" value={cd.price != null ? `₦${cd.price.toLocaleString()}` : sel.lv ? `₦${sel.price.toLocaleString()}` : NA} />
               <Metric label="Market Cap" value={cd.marketCap ? nairaBig(cd.marketCap) : NA} />
               <Metric label="52-Week Range" value={cd.low52 != null && cd.high52 != null ? `₦${cd.low52}–${cd.high52}` : NA} />
               <Metric label="Day Range" value={cd.dayLow != null && cd.dayHigh != null ? `₦${cd.dayLow}–${cd.dayHigh}` : NA} />
@@ -1100,7 +1103,7 @@ export default function App() {
 
             <ProfileSection title="Risk Scores" sample={sel.hasAnalytics}>
               <Metric label="Risk Level" value={fmt(sel.risk)} color={has(sel.risk) ? RISK_COLOR[sel.risk] : undefined} />
-              <Metric label="Price Momentum (1D)" value={momentumOf(sel.chg)} color={sel.chg >= 0 ? ACCENT : RED} />
+              <Metric label="Price Momentum (1D)" value={momentumOf(cd.price != null ? cd.changePct : sel.lv ? sel.chg : null)} color={chgColor(cd.price != null ? cd.changePct : sel.lv ? sel.chg : null)} />
             </ProfileSection>
 
             <ProfileSection title="AI Scores" sample={sel.hasAnalytics} note={sel.hasAnalytics ? "⚠ Model probability estimates — not guarantees. Wide confidence around all horizons." : undefined}>
@@ -1198,7 +1201,7 @@ export default function App() {
                 </thead>
                 <tbody>
                   {[
-                    ["Price (₦)", (c) => c.price.toLocaleString()],
+                    ["Price (₦)", (c) => (c.lv ? c.price.toLocaleString() : "—")],
                     ["AI Rating", (c) => c.rating, true],
                     ["Health /100", (c) => c.health],
                     ["P/E", (c) => c.pe], ["P/B", (c) => c.pb],
@@ -1277,7 +1280,7 @@ export default function App() {
                   <div style={{ display: "flex", gap: 14, marginTop: 12, fontSize: 12, fontFamily: "JetBrains Mono" }}>
                     <span style={{ color: "rgba(255,255,255,0.55)" }}>P/E {c.pe}</span>
                     <span style={{ color: "rgba(255,255,255,0.55)" }}>Div {c.div}%</span>
-                    <span style={{ color: c.chg >= 0 ? ACCENT : RED }}>{c.chg >= 0 ? "+" : ""}{c.chg}%</span>
+                    <span style={{ color: chgColor(c.lv ? c.chg : null) }}>{chgText(c.lv ? c.chg : null)}</span>
                   </div>
                 </div>
               ))}
@@ -1312,8 +1315,8 @@ export default function App() {
                 </div>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 14, flexShrink: 0 }}>
-                <span className="hide-sm" style={{ fontSize: 12, fontFamily: "JetBrains Mono", color: "rgba(255,255,255,0.7)" }}>₦{c.price.toLocaleString()}</span>
-                <span style={{ fontSize: 12, fontFamily: "JetBrains Mono", color: c.chg >= 0 ? ACCENT : RED, minWidth: 52, textAlign: "right" }}>{c.chg >= 0 ? "+" : ""}{c.chg}%</span>
+                <span className="hide-sm" style={{ fontSize: 12, fontFamily: "JetBrains Mono", color: "rgba(255,255,255,0.7)" }}>{c.lv ? `₦${c.price.toLocaleString()}` : "—"}</span>
+                <span style={{ fontSize: 12, fontFamily: "JetBrains Mono", color: chgColor(c.lv ? c.chg : null), minWidth: 52, textAlign: "right" }}>{chgText(c.lv ? c.chg : null)}</span>
                 <button onClick={() => toggleList(c.t)} style={{
                   fontSize: 11.5, padding: "5px 12px", borderRadius: 16, cursor: "pointer", fontWeight: 600,
                   border: `1px solid ${inList ? RED : ACCENT}`, background: "transparent", color: inList ? RED : ACCENT,
