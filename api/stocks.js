@@ -66,8 +66,10 @@ export default async function handler(req, res) {
       const price = num(r.ClosePrice);
       if (!t || !price) continue;
       const prev = num(r.PrevClosingPrice);
-      // NGX's own % change when published; otherwise derive it from the previous close.
-      const chg = num(r.PercChange) ?? (prev ? +(((price - prev) / prev) * 100).toFixed(2) : 0);
+      // Derive the day change from close vs previous close. NGX's PercChange field is
+      // unreliable for some rows (it can reflect the day's low instead of the close),
+      // so it's only used when the previous close is missing.
+      const chg = prev ? +(((price - prev) / prev) * 100).toFixed(2) : num(r.PercChange) ?? 0;
       const named = am[t];
       stocks.push({
         t,
