@@ -319,7 +319,7 @@ const fmtTick = (t, range) => {
   const x = new Date(t);
   return ["CUR", "30D", "1M", "3M", "6M", "YTD"].includes(range)
     ? x.toLocaleDateString(undefined, { day: "numeric", month: "short", timeZone: "UTC" })
-    : x.toLocaleDateString(undefined, { month: "short", year: "2-digit", timeZone: "UTC" });
+    : `${x.toLocaleDateString(undefined, { month: "short", timeZone: "UTC" })} '${String(x.getUTCFullYear()).slice(2)}`;
 };
 // [key, button label, subtitle]. "Current" = the last 5 trading sessions (NGX has no free intraday data).
 const ASI_RANGES = [
@@ -391,7 +391,15 @@ export default function App() {
     if (!asi?.series?.length) return [];
     const end = asi.series[asi.series.length - 1][0];
     // "Current" = last 5 sessions plus the prior close, so the change shown is over 5 trading days.
-    const pts = asiRange === "CUR" ? asi.series.slice(-6) : asi.series.filter(([t]) => t >= rangeStart(end, asiRange));
+    // Date ranges start from the last close on/before the start date (e.g. YTD from last year's
+    // final close) — the same baseline the YTD / 1-year tiles use, so the numbers agree.
+    let pts;
+    if (asiRange === "CUR") pts = asi.series.slice(-6);
+    else {
+      const start = rangeStart(end, asiRange);
+      const first = asi.series.findIndex(([t]) => t >= start);
+      pts = first < 0 ? [] : asi.series.slice(Math.max(0, asi.series[first][0] > start ? first - 1 : first));
+    }
     const step = Math.max(1, Math.floor(pts.length / 400)); // keep the chart light
     return pts.filter((_, i) => i % step === 0 || i === pts.length - 1).map(([t, v]) => ({ t, v }));
   }, [asi, asiRange]);
