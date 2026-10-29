@@ -4,6 +4,7 @@
 // CORS blocks it), so the frontend posts here and we call Anthropic server-side.
 // Set ANTHROPIC_API_KEY in Vercel → Project → Settings → Environment Variables.
 // Optional: ANTHROPIC_MODEL to override the default model.
+// After changing env vars, redeploy (or push a commit) so they take effect.
 
 // Tried in order; a model that's retired or unavailable to the key falls through to the next.
 const MODELS = [process.env.ANTHROPIC_MODEL, "claude-sonnet-4-5", "claude-haiku-4-5"].filter(Boolean);
